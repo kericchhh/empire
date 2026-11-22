@@ -3,8 +3,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use sim_core::{Event, SeatId};
+use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::{Row, SqlitePool};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -66,21 +66,20 @@ impl Store {
     }
 
     pub async fn load(&self) -> Result<Option<Saved>, StoreError> {
-        let meta: BTreeMap<String, String> = sqlx::query("SELECT key, value FROM meta")
+        let meta: BTreeMap<String, String> = sqlx::query_as("SELECT key, value FROM meta")
             .fetch_all(&self.pool)
             .await?
             .into_iter()
-            .map(|r| (r.get("key"), r.get("value")))
             .collect();
         if meta.is_empty() {
             return Ok(None);
         }
         let get = |k: &'static str| meta.get(k).cloned().ok_or(StoreError::Missing(k));
-        let seat_tokens = sqlx::query("SELECT seat, token FROM seats")
+        let seat_tokens = sqlx::query_as("SELECT seat, token FROM seats")
             .fetch_all(&self.pool)
             .await?
             .into_iter()
-            .map(|r| (SeatId(r.get("seat")), r.get("token")))
+            .map(|(seat, token): (String, String)| (SeatId(seat), token))
             .collect();
         let events = self
             .events_after(0, i64::MAX)
@@ -143,15 +142,13 @@ impl Store {
         seq: i64,
         limit: i64,
     ) -> Result<Vec<(i64, Event)>, StoreError> {
-        sqlx::query("SELECT seq, body FROM events WHERE seq > ? ORDER BY seq LIMIT ?")
+        sqlx::query_as("SELECT seq, body FROM events WHERE seq > ? ORDER BY seq LIMIT ?")
             .bind(seq)
             .bind(limit)
             .fetch_all(&self.pool)
             .await?
             .into_iter()
-            .map(|r| {
-                let seq: i64 = r.get("seq");
-                let body: String = r.get("body");
+            .map(|(seq, body): (i64, String)| {
                 serde_json::from_str(&body)
                     .map(|e| (seq, e))
                     .map_err(|source| StoreError::Corrupt { seq, source })
