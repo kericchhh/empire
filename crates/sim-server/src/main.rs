@@ -125,7 +125,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run(a: RunArgs) -> anyhow::Result<()> {
-    let mut agents = (a.agents.as_deref())
+    let mut agents = a
+        .agents
+        .as_deref()
         .map(|p| anyhow::Ok(RunnerConfig::from_yaml(&read(p)?)?))
         .transpose()?;
     if let Some(all) = a.play_all {
@@ -198,7 +200,9 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
         }
         let tokens = created.seat_tokens;
         let plan = Plan {
-            tokens: (config.seats.keys())
+            tokens: config
+                .seats
+                .keys()
                 .filter_map(|s| Some((s.clone(), tokens.get(s)?.clone())))
                 .collect(),
             config,
