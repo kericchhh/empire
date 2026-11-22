@@ -8,40 +8,28 @@ use serde::Deserialize;
 use sim_core::SeatId;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct RunnerConfig {
     /// Agent runs allowed at the same time, across all seats. Every run uses the same
     /// subscription, so this is the main lever on usage limits.
-    #[serde(default = "default_concurrency")]
     pub max_concurrent: usize,
     /// A run still going after this long is stopped and the seat's turn is ended for it.
-    #[serde(default = "default_timeout")]
     pub turn_timeout_seconds: u64,
     /// The agent for every seat not listed in `seats`, except the game master's. Lets one
     /// file, or the `--play-all` flag, fit any scenario.
-    #[serde(default)]
     pub all: Option<AgentConfig>,
-    #[serde(default)]
     pub seats: BTreeMap<SeatId, AgentConfig>,
 }
 
 impl Default for RunnerConfig {
     fn default() -> Self {
         Self {
-            max_concurrent: default_concurrency(),
-            turn_timeout_seconds: default_timeout(),
+            max_concurrent: 2,
+            turn_timeout_seconds: 240,
             all: None,
             seats: BTreeMap::new(),
         }
     }
-}
-
-fn default_concurrency() -> usize {
-    2
-}
-
-fn default_timeout() -> u64 {
-    240
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -56,13 +44,10 @@ impl std::str::FromStr for AgentConfig {
 
     /// `claude` or `claude:<model>`, as the command line takes it.
     fn from_str(s: &str) -> Result<Self, ConfigError> {
-        let (kind, model) = match s.split_once(':') {
-            Some((k, m)) => (k, Some(m.to_owned())),
-            None => (s, None),
-        };
+        let (kind, model) = s.split_once(':').unwrap_or((s, ""));
         match kind {
             "claude" => Ok(Self::Claude(ClaudeConfig {
-                model: model.filter(|m| !m.is_empty()),
+                model: Some(model.to_owned()).filter(|m| !m.is_empty()),
                 effort: None,
                 command: default_claude(),
             })),
@@ -77,10 +62,8 @@ impl std::str::FromStr for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClaudeConfig {
     /// A model alias such as `sonnet` or `haiku`, or a full model name. Default: the CLI's.
-    #[serde(default)]
     pub model: Option<String>,
     /// `low`, `medium`, `high`, `xhigh` or `max`. Default: the CLI's.
-    #[serde(default)]
     pub effort: Option<String>,
     /// The executable to launch.
     #[serde(default = "default_claude")]
@@ -105,20 +88,20 @@ impl RunnerConfig {
             serde_yaml_ng::Deserializer::from_str(src),
         )
         .map_err(ConfigError::Yaml)?;
-        if c.max_concurrent == 0 {
-            return Err(ConfigError::Invalid(
-                "max_concurrent must be at least 1".into(),
-            ));
-        }
-        if c.turn_timeout_seconds == 0 {
-            return Err(ConfigError::Invalid(
-                "turn_timeout_seconds must be at least 1".into(),
-            ));
-        }
-        if c.seats.is_empty() && c.all.is_none() {
-            return Err(ConfigError::Invalid(
-                "no seats are assigned an agent: list `seats` or set `all`".into(),
-            ));
+        for (bad, problem) in [
+            (c.max_concurrent == 0, "max_concurrent must be at least 1"),
+            (
+                c.turn_timeout_seconds == 0,
+                "turn_timeout_seconds must be at least 1",
+            ),
+            (
+                c.seats.is_empty() && c.all.is_none(),
+                "no seats are assigned an agent: list `seats` or set `all`",
+            ),
+        ] {
+            if bad {
+                return Err(ConfigError::Invalid(problem.into()));
+            }
         }
         Ok(c)
     }
@@ -171,10 +154,6 @@ mod tests {
         };
         assert_eq!(model("a").as_deref(), Some("opus"));
         assert_eq!(model("c").as_deref(), Some("haiku"));
-    }
-
-    #[test]
-    fn an_agents_file_may_set_only_all() {
         let c = RunnerConfig::from_yaml("all: { claude: {} }\n").unwrap();
         assert!(c.seats.is_empty() && c.all.is_some());
     }

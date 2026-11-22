@@ -147,7 +147,8 @@ pub async fn author(job: &AuthorJob<'_>) -> Result<Authored, AuthorError> {
     let work = job.log_dir.join(".work");
     let mut rejected: Option<(String, String)> = None;
     let mut runs = Vec::new();
-    for attempt in 1..=job.attempts.max(1) {
+    let attempts = job.attempts.max(1);
+    for attempt in 1..=attempts {
         let input = prompt(
             &rules,
             job.request,
@@ -176,32 +177,30 @@ pub async fn author(job: &AuthorJob<'_>) -> Result<Authored, AuthorError> {
                 )));
             }
         }
-        let d = match draft(&output) {
-            Ok(d) => d,
+        rejected = Some(match draft(&output) {
             Err(problem) => {
                 tracing::info!(attempt, %problem, "author run returned no draft");
                 let last = rejected.map(|(d, _)| d).unwrap_or_default();
-                rejected = Some((last, format!("the run {problem}")));
-                continue;
+                (last, format!("the run {problem}"))
             }
-        };
-        match check(&d) {
-            Ok((yaml, world)) => {
-                return Ok(Authored {
-                    yaml,
-                    world,
-                    attempts: attempt,
-                    runs,
-                });
-            }
-            Err(problem) => {
-                tracing::info!(attempt, %problem, "draft scenario rejected");
-                rejected = Some((d.to_string(), problem));
-            }
-        }
+            Ok(d) => match check(&d) {
+                Ok((yaml, world)) => {
+                    return Ok(Authored {
+                        yaml,
+                        world,
+                        attempts: attempt,
+                        runs,
+                    });
+                }
+                Err(problem) => {
+                    tracing::info!(attempt, %problem, "draft scenario rejected");
+                    (d.to_string(), problem)
+                }
+            },
+        });
     }
     Err(AuthorError::Rejected {
-        attempts: job.attempts.max(1),
+        attempts,
         last: rejected.map(|(_, p)| p).unwrap_or_default(),
     })
 }
