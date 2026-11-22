@@ -1,16 +1,6 @@
-# CI for the whole workspace. Rust jobs use --workspace, so adding a crate needs no edit here.
-#
-# Optional parts switch on by detection (job `detect`); when absent they are skipped,
-# and a skipped job counts as green in `ci-success`:
-#   web/package.json + a lockfile   -> web, web-build; Rust jobs then wait for web-build,
-#                                      because sim-server embeds web/dist at build time.
-#                                      pnpm needs "packageManager" in web/package.json.
-#                                      Runs typecheck, lint, test, build when those scripts exist.
-#   schema/scenario.schema.json     -> scenarios (validates scenarios/*.yaml against it)
-#   schema/scenario.schema.json     -> generated (regenerates it with `sim-server schema`, runs
-#   or scripts/generate.sh             scripts/generate.sh if present, e.g. for ts-rs bindings,
-#                                      then fails on any diff). Generated files must be tracked;
-#                                      web/dist and target/ must be gitignored.
+# CI for what is built today: the Rust workspace (sim-core, sim-server), the generated
+# scenario schema and the scenario files. Rust jobs use --workspace, so adding a crate
+# needs no edit here. The Tauri app in app/ gets its jobs when it lands.
 #
 # Branch protection: require only the `ci-success` check.
 name: CI
@@ -43,49 +33,6 @@ defaults:
     shell: bash
 
 jobs:
-  detect:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      web: ${{ steps.d.outputs.web }}
-      pm: ${{ steps.d.outputs.pm }}
-      lockfile: ${{ steps.d.outputs.lockfile }}
-      schema: ${{ steps.d.outputs.schema }}
-      generate: ${{ steps.d.outputs.generate }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - id: d
-        run: |
-          web=false pm=none lockfile=none schema=false generate=false
-          if [ -f web/package.json ]; then
-            web=true
-            if   [ -f web/pnpm-lock.yaml ];    then pm=pnpm lockfile=pnpm-lock.yaml
-            elif [ -f web/package-lock.json ]; then pm=npm  lockfile=package-lock.json
-            elif [ -f web/yarn.lock ];         then pm=yarn lockfile=yarn.lock
-            else
-              echo "::error::web/package.json exists but web/ has no pnpm-lock.yaml, package-lock.json or yarn.lock"
-              exit 1
-            fi
-          else
-            echo "::notice::web/package.json not found: web jobs skipped"
-          fi
-          if [ -f schema/scenario.schema.json ] && compgen -G 'scenarios/*.yaml' >/dev/null; then
-            schema=true
-          else
-            echo "::notice::schema/scenario.schema.json or scenarios/*.yaml not found: scenario validation skipped"
-          fi
-          if [ -f schema/scenario.schema.json ] || [ -f scripts/generate.sh ]; then
-            generate=true
-          else
-            echo "::notice::no schema/ or scripts/generate.sh: generated-files check skipped"
-          fi
-          {
-            echo "web=$web"; echo "pm=$pm"; echo "lockfile=$lockfile"
-            echo "schema=$schema"; echo "generate=$generate"
-          } >> "$GITHUB_OUTPUT"
-
   fmt:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -96,67 +43,7 @@ jobs:
       - run: rustup show active-toolchain || rustup toolchain install
       - run: cargo fmt --all --check
 
-  web:
-    needs: detect
-    if: needs.detect.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/web
-        with:
-          pm: ${{ needs.detect.outputs.pm }}
-          lockfile: ${{ needs.detect.outputs.lockfile }}
-      - name: Typecheck, lint, test
-        working-directory: web
-        env:
-          PM: ${{ needs.detect.outputs.pm }}
-        run: |
-          for script in typecheck lint test; do
-            if jq -e --arg s "$script" '.scripts[$s]' package.json >/dev/null; then
-              echo "::group::$PM run $script"
-              "$PM" run "$script"
-              echo "::endgroup::"
-            else
-              echo "::notice::web/package.json has no \"$script\" script: skipped"
-            fi
-          done
-
-  web-build:
-    needs: detect
-    if: needs.detect.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/web
-        with:
-          pm: ${{ needs.detect.outputs.pm }}
-          lockfile: ${{ needs.detect.outputs.lockfile }}
-      - name: Build
-        working-directory: web
-        env:
-          PM: ${{ needs.detect.outputs.pm }}
-        run: |
-          jq -e '.scripts.build' package.json >/dev/null \
-            || { echo "::error::web/package.json has no \"build\" script, but sim-server embeds web/dist"; exit 1; }
-          "$PM" run build
-          test -d dist || { echo "::error::web build did not produce web/dist"; exit 1; }
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: web/dist
-          if-no-files-found: error
-          retention-days: 1
-
   clippy:
-    needs: [detect, web-build]
-    # Run when web-build succeeded or was skipped (no web/), never when it failed.
-    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -164,13 +51,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust
-        with:
-          web: ${{ needs.detect.outputs.web }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    needs: [detect, web-build]
-    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -178,12 +61,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust
-        with:
-          web: ${{ needs.detect.outputs.web }}
       - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
         with:
           tool: cargo-nextest@0.9
-      # Includes the golden-run snapshots and the replay-invariant proptest.
+      # Includes the golden-run snapshots, the replay-invariant proptest and the MCP/HTTP e2e tests.
       - run: cargo nextest run --workspace --locked --no-tests=fail
       # nextest does not run doctests.
       - run: cargo test --workspace --doc --locked
@@ -193,8 +74,6 @@ jobs:
           [ -z "$pending" ] || { echo "::error::pending insta snapshots:"; echo "$pending"; exit 1; }
 
   doc:
-    needs: [detect, web-build]
-    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -202,13 +81,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust
-        with:
-          web: ${{ needs.detect.outputs.web }}
       - run: cargo doc --workspace --no-deps --locked
 
-  generated:
-    needs: [detect, web-build]
-    if: ${{ !cancelled() && !failure() && needs.detect.outputs.generate == 'true' }}
+  schema:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -216,23 +91,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust
-        with:
-          web: ${{ needs.detect.outputs.web }}
-      - name: Regenerate
+      - run: cargo run --locked --quiet -p sim-server -- schema > schema/scenario.schema.json
+      - name: Schema is up to date
         run: |
-          if [ -f schema/scenario.schema.json ]; then
-            cargo run --locked --quiet -p sim-server -- schema > schema/scenario.schema.json
-          fi
-          if [ -f scripts/generate.sh ]; then bash scripts/generate.sh; fi
-      - name: Generated files are up to date
-        run: |
-          git add --intent-to-add --all
-          git diff --exit-code --stat \
-            || { echo "::error::generated files are stale: run scripts/generate.sh and commit the result"; exit 1; }
+          git diff --exit-code --stat -- schema/ \
+            || { echo "::error::schema/scenario.schema.json is stale: run 'cargo run -p sim-server -- schema > schema/scenario.schema.json' and commit it"; exit 1; }
 
   scenarios:
-    needs: detect
-    if: needs.detect.outputs.schema == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -255,15 +120,14 @@ jobs:
 
   ci-success:
     if: ${{ always() }}
-    needs: [detect, fmt, web, web-build, clippy, test, doc, generated, scenarios, deny]
+    needs: [fmt, clippy, test, doc, schema, scenarios, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      # Skipped counts as green (gated jobs); failed or cancelled does not.
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           echo "job results: $RESULTS"
           case " $RESULTS " in
-            *" failure "*|*" cancelled "*) exit 1 ;;
+            *" failure "*|*" cancelled "*|*" skipped "*) exit 1 ;;
           esac
