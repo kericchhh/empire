@@ -30,15 +30,21 @@ pub enum Cause {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
+    /// Every seat in the world.
     Public,
+    /// Every seat of one empire.
+    Empire(EmpireId),
     Seats(Vec<SeatId>),
 }
 
-/// A concrete number to change. Scenario effects resolve to these before they are logged.
+/// A concrete number to change. Ruleset effects resolve to these before they are logged.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
-    Metric(MetricId),
+    Metric {
+        empire: EmpireId,
+        metric: MetricId,
+    },
     Stat {
         region: RegionId,
         stat: StatId,
@@ -64,6 +70,11 @@ pub struct Effect {
 pub enum EventKind {
     WorldStarted {
         seed: u64,
+    },
+    /// Every starting number, as the scenario set it or as drawn from the seed. Stored so a
+    /// replay never runs generation again.
+    WorldGenerated {
+        values: Vec<StartingValue>,
     },
     SeatJoined {
         seat: SeatId,
@@ -105,6 +116,8 @@ pub enum EventKind {
     },
     RuleFired {
         rule: RuleId,
+        /// The empire whose numbers the rule read.
+        empire: EmpireId,
         #[serde(default)]
         region: Option<RegionId>,
         #[serde(default)]
@@ -121,8 +134,10 @@ pub enum EventKind {
         /// Consecutive-tick counters for rule and ending conditions after this tick.
         streaks: BTreeMap<String, u32>,
     },
-    WorldEnded {
-        ending: EndingId,
-        label: String,
-    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StartingValue {
+    pub target: Target,
+    pub value: f64,
 }

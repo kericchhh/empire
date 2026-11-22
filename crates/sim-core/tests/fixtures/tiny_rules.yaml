@@ -1,0 +1,55 @@
+metrics:
+  - { id: treasury, name: Treasury, initial: 100, visible_to: [head_of_state] }
+  - { id: stability, name: Stability, initial: 0.5, min: 0, max: 1 }
+region_stats:
+  - { id: unrest, name: Unrest, initial: 0.2, start_range: [0.1, 0.3], min: 0, max: 1 }
+resources:
+  - { id: influence, name: Influence, initial: 2, min: 0 }
+offices:
+  - id: head_of_state
+    name: Head of state
+    public: true
+    actions: [decree, feast, spy]
+  - id: official
+    name: Official
+    actions: [plot]
+  - id: cohort
+    name: Populace
+    actions: [work]
+    default_action: work
+    region_sight: home
+actions:
+  - id: feast
+    name: Feast
+    target: region
+    effects:
+      - { target: { metric: treasury }, delta: -10 }
+      - { target: { stat: unrest }, delta: -0.5 }
+  - id: decree
+    name: Decree
+    cost: { influence: 1 }
+    effects: [{ target: { metric: stability }, delta: 0.1 }]
+  - id: spy
+    name: Spy
+    target: character
+    secret: true
+    effects: [{ target: { target_resource: influence }, delta: -1 }]
+  - id: plot
+    name: Plot
+    cost: { influence: 1 }
+    effects: [{ target: { metric: stability }, delta: -0.1 }]
+  - id: work
+    name: Work
+    effects: [{ target: { metric: treasury }, delta: 1 }]
+rules:
+  - id: unrest_hurts
+    label: Trouble in {region} troubles {empire}
+    scope: each_region
+    when: { value: { stat: unrest }, above: 0.8, for_ticks: 2 }
+    effects: [{ target: { metric: stability }, delta: -0.2 }]
+limits:
+  orders_per_character: 2
+  text_chars: 50
+  notes_kept: 2
+  ruling_max_delta: 0.3
+  ruling_max_effects: 1

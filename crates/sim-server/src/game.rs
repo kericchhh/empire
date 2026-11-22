@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use sim_core::engine::{self, close_tick};
 use sim_core::perceive::{Sight, describe};
 use sim_core::{
-    CharacterId, Effect, Event, Order, Perception, Rejection, Ruling, Scenario, SeatId, State,
-    Submission, Tick, TurnInput, perceive,
+    CharacterId, DefinitionError, Effect, EmpireId, Event, Order, Perception, Rejection, Ruling,
+    Scenario, SeatId, State, Submission, Tick, TurnInput, World, perceive,
 };
 use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
@@ -26,7 +26,7 @@ pub enum GameError {
     #[error(transparent)]
     Rejected(#[from] Rejection),
     #[error("scenario: {0}")]
-    Scenario(#[from] sim_core::scenario::ScenarioError),
+    Scenario(#[from] DefinitionError),
     #[error("storage: {0}")]
     Store(#[from] StoreError),
 }
@@ -46,7 +46,6 @@ pub enum TurnStatus {
     YourTurn,
     /// You ended your turn; the tick has not closed yet. Call wait_for_turn again.
     Waiting,
-    WorldEnded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -75,7 +74,7 @@ pub struct EndTurnView {
 /// Full world for observers. Contains every secret, so it is only served to the admin.
 #[derive(Debug, Clone, Serialize)]
 pub struct Overview {
-    pub scenario: Scenario,
+    pub world: World,
     pub state: State,
     pub date: String,
     pub last_seq: i64,
@@ -84,7 +83,7 @@ pub struct Overview {
 }
 
 struct Inner {
-    sc: Scenario,
+    w: World,
     state: State,
     tokens: BTreeMap<String, SeatId>,
     queued: BTreeMap<SeatId, Vec<TurnInput>>,
@@ -121,26 +120,29 @@ impl Game {
         seed: u64,
         config: Config,
     ) -> Result<Created, GameError> {
-        let (sc, admin_token, seat_tokens, events) = match store.load().await? {
+        let (w, admin_token, seat_tokens, events) = match store.load().await? {
             Some(saved) => (
-                Scenario::from_yaml(&saved.scenario_yaml)?,
+                World::standard(Scenario::from_yaml(&saved.scenario_yaml)?)?,
                 saved.admin_token,
                 saved.seat_tokens,
                 saved.events,
             ),
             None => {
                 let yaml = scenario_yaml.ok_or(StoreError::Missing("scenario"))?;
-                let sc = Scenario::from_yaml(yaml)?;
+                let w = World::standard(Scenario::from_yaml(yaml)?)?;
                 let admin = token();
-                let seats: BTreeMap<_, _> =
-                    sc.seats.iter().map(|s| (s.id.clone(), token())).collect();
+                let seats: BTreeMap<_, _> = w
+                    .scenario
+                    .seat_ids()
+                    .map(|s| (s.clone(), token()))
+                    .collect();
                 store.create(yaml, &admin, &seats).await?;
-                let events = engine::start(&sc, seed);
+                let events = engine::start(&w, seed);
                 store.append(&events).await?;
-                (sc, admin, seats, events)
+                (w, admin, seats, events)
             }
         };
-        let state = State::replay(&sc, &events);
+        let state = State::replay(&w, &events);
         let (tick_tx, _) = watch::channel(state.tick);
         let (events_tx, _) = tokio::sync::broadcast::channel(1024);
         let inner = Inner {
@@ -148,7 +150,7 @@ impl Game {
                 .iter()
                 .map(|(s, t)| (t.clone(), s.clone()))
                 .collect(),
-            sc,
+            w,
             state,
             queued: BTreeMap::new(),
             ended_turn: BTreeSet::new(),
@@ -200,9 +202,7 @@ impl Game {
     }
 
     fn view(inner: &Inner, seat: &SeatId) -> TurnView {
-        let status = if inner.state.ended.is_some() {
-            TurnStatus::WorldEnded
-        } else if inner.ended_turn.contains(seat) {
+        let status = if inner.ended_turn.contains(seat) {
             TurnStatus::Waiting
         } else {
             TurnStatus::YourTurn
@@ -210,9 +210,9 @@ impl Game {
         TurnView {
             status,
             tick: inner.state.tick,
-            date: inner.sc.date(inner.state.tick),
+            date: inner.w.date(inner.state.tick),
             perception: (status != TurnStatus::Waiting)
-                .then(|| perceive(&inner.sc, &inner.state, seat))
+                .then(|| perceive(&inner.w, &inner.state, seat))
                 .flatten(),
         }
     }
@@ -220,7 +220,7 @@ impl Game {
     pub async fn join(&self, token: &str) -> Result<TurnView, GameError> {
         let mut inner = self.inner.lock().await;
         let seat = Self::seat(&inner, token)?;
-        if let Some(e) = engine::join(&inner.sc, &inner.state, &seat)? {
+        if let Some(e) = engine::join(&inner.w, &inner.state, &seat)? {
             self.commit(&mut inner, vec![e]).await?;
         }
         Ok(Self::view(&inner, &seat))
@@ -230,7 +230,7 @@ impl Game {
         let inner = self.inner.lock().await;
         let seat = Self::seat(&inner, token)?;
         let mut v = Self::view(&inner, &seat);
-        v.perception = perceive(&inner.sc, &inner.state, &seat);
+        v.perception = perceive(&inner.w, &inner.state, &seat);
         Ok(v)
     }
 
@@ -267,9 +267,6 @@ impl Game {
     /// Orders, rulings and end_turn name the tick they were decided in, so a decision made
     /// on old perception never lands in a later tick.
     fn check_turn(inner: &Inner, seat: &SeatId, tick: Tick) -> Result<(), GameError> {
-        if inner.state.ended.is_some() {
-            return Err(Rejection::WorldEnded.into());
-        }
         if tick != inner.state.tick {
             return Err(GameError::StaleTick {
                 current: inner.state.tick,
@@ -290,7 +287,7 @@ impl Game {
         let mut inner = self.inner.lock().await;
         let seat = Self::seat(&inner, token)?;
         Self::check_turn(&inner, &seat, tick)?;
-        let limit = inner.sc.limits.orders_per_character;
+        let limit = inner.w.rules.limits.orders_per_character;
         let mut results = Vec::with_capacity(orders.len());
         for (index, order) in orders.into_iter().enumerate() {
             let used = inner
@@ -306,7 +303,7 @@ impl Game {
                     order.character()
                 ))
             } else {
-                engine::check_order(&inner.sc, &inner.state, &seat, &order)
+                engine::check_order(&inner.w, &inner.state, &seat, &order)
                     .map_err(|e| e.to_string())
             };
             if check.is_ok() {
@@ -348,7 +345,7 @@ impl Game {
                     ruling.pending_id
                 ))
             } else {
-                engine::check_ruling(&inner.sc, &inner.state, &seat, &ruling)
+                engine::check_ruling(&inner.w, &inner.state, &seat, &ruling)
                     .map_err(|e| e.to_string())
             };
             if check.is_ok() {
@@ -379,7 +376,7 @@ impl Game {
     ) -> Result<(), GameError> {
         let mut inner = self.inner.lock().await;
         let seat = Self::seat(&inner, token)?;
-        let e = engine::message(&inner.sc, &inner.state, &seat, from, to, text)?;
+        let e = engine::message(&inner.w, &inner.state, &seat, from, to, text)?;
         self.commit(&mut inner, vec![e]).await
     }
 
@@ -391,7 +388,7 @@ impl Game {
     ) -> Result<(), GameError> {
         let mut inner = self.inner.lock().await;
         let seat = Self::seat(&inner, token)?;
-        let e = engine::note(&inner.sc, &inner.state, &seat, character, text)?;
+        let e = engine::note(&inner.w, &inner.state, &seat, character, text)?;
         self.commit(&mut inner, vec![e]).await
     }
 
@@ -400,7 +397,7 @@ impl Game {
         let seat = Self::seat(&inner, token)?;
         Self::check_turn(&inner, &seat, tick)?;
         if !inner.state.joined.contains(&seat)
-            && let Some(e) = engine::join(&inner.sc, &inner.state, &seat)?
+            && let Some(e) = engine::join(&inner.w, &inner.state, &seat)?
         {
             self.commit(&mut inner, vec![e]).await?;
         }
@@ -429,7 +426,7 @@ impl Game {
 
     async fn close(&self, inner: &mut Inner) -> Result<(), GameError> {
         let inputs: Vec<TurnInput> = inner.queued.values().flatten().cloned().collect();
-        let events = close_tick(&inner.sc, &inner.state, &inputs);
+        let events = close_tick(&inner.w, &inner.state, &inputs);
         self.commit(inner, events).await?;
         inner.queued.clear();
         inner.ended_turn.clear();
@@ -442,9 +439,6 @@ impl Game {
     /// Close the current tick now, whoever is still deciding.
     pub async fn force_close(&self) -> Result<Tick, GameError> {
         let mut inner = self.inner.lock().await;
-        if inner.state.ended.is_some() {
-            return Err(Rejection::WorldEnded.into());
-        }
         self.close(&mut inner).await?;
         Ok(inner.state.tick)
     }
@@ -454,7 +448,7 @@ impl Game {
         let mut inner = self.inner.lock().await;
         let due = inner.tick_opened.elapsed() >= self.config.tick_deadline;
         let anyone = !inner.state.joined.is_empty() || self.config.autoplay;
-        if !due || !anyone || inner.state.ended.is_some() {
+        if !due || !anyone {
             return Ok(false);
         }
         self.close(&mut inner).await?;
@@ -471,14 +465,16 @@ impl Game {
         }
     }
 
+    /// A user-made event. With `audience`, only that empire's seats hear of it.
     pub async fn intervene(
         &self,
         title: &str,
         text: &str,
         effects: Vec<Effect>,
+        audience: Option<&EmpireId>,
     ) -> Result<i64, GameError> {
         let mut inner = self.inner.lock().await;
-        let e = engine::intervene(&inner.sc, &inner.state, title, text, effects)?;
+        let e = engine::intervene(&inner.w, &inner.state, title, text, effects, audience)?;
         self.commit(&mut inner, vec![e]).await?;
         Ok(inner.last_seq)
     }
@@ -490,13 +486,13 @@ impl Game {
             .recent
             .iter()
             .filter_map(|e| {
-                describe(&inner.sc, e, &Sight::all())
-                    .map(|d| format!("[{}] {d}", inner.sc.date(e.tick)))
+                describe(&inner.w, e, &Sight::all())
+                    .map(|d| format!("[{}] {d}", inner.w.date(e.tick)))
             })
             .collect();
         Overview {
-            scenario: inner.sc.clone(),
-            date: inner.sc.date(inner.state.tick),
+            world: inner.w.clone(),
+            date: inner.w.date(inner.state.tick),
             state: inner.state.clone(),
             last_seq: inner.last_seq,
             ended_turn: inner.ended_turn.iter().cloned().collect(),
@@ -504,8 +500,8 @@ impl Game {
         }
     }
 
-    pub async fn scenario(&self) -> Scenario {
-        self.inner.lock().await.sc.clone()
+    pub async fn world(&self) -> World {
+        self.inner.lock().await.w.clone()
     }
 }
 
@@ -543,8 +539,11 @@ mod tests {
             &self.tokens[&SeatId::from(seat)]
         }
 
-        async fn metric(&self, id: &str) -> f64 {
-            self.game.overview().await.state.metrics[&id.into()]
+        /// A kingdom metric. Tests use culture: in this fixture no standard rule moves it,
+        /// so only the orders under test do.
+        async fn culture(&self) -> f64 {
+            let state = self.game.overview().await.state;
+            state.metric(&"kingdom".into(), &"culture".into()).unwrap()
         }
 
         async fn tick(&self) -> Tick {
@@ -624,9 +623,9 @@ mod tests {
                 t.tok("crown"),
                 Tick(0),
                 vec![
-                    action("queen", "decree", None),
+                    action("queen", "public_works", Some("north")),
                     action("queen", "fly", None),
-                    action("duke", "decree", None),
+                    action("duke", "public_works", Some("north")),
                 ],
             )
             .await
@@ -641,12 +640,12 @@ mod tests {
         );
         assert!(r[2].error.as_deref().unwrap().contains("does not control"));
 
-        assert!(
-            (t.metric("order").await - 0.5).abs() < 1e-9,
-            "nothing resolves before close"
-        );
+        let before = t.culture().await;
         t.game.end_turn(t.tok("crown"), Tick(0)).await.unwrap();
-        assert!((t.metric("order").await - 0.6).abs() < 1e-9);
+        assert!(
+            (t.culture().await - (before + 0.02)).abs() < 1e-9,
+            "the works resolve at close"
+        );
     }
 
     #[tokio::test]
@@ -654,16 +653,16 @@ mod tests {
         let t = T::tiny().await;
         let tok = t.tok("crown");
         t.game
-            .act(tok, Tick(0), vec![action("queen", "decree", None)])
+            .act(tok, Tick(0), vec![action("queen", "issue_edict", None)])
             .await
             .unwrap();
         t.game
-            .act(tok, Tick(0), vec![action("queen", "feast", Some("north"))])
+            .act(tok, Tick(0), vec![action("queen", "relief", Some("north"))])
             .await
             .unwrap();
         let third = t
             .game
-            .act(tok, Tick(0), vec![action("queen", "decree", None)])
+            .act(tok, Tick(0), vec![action("queen", "issue_edict", None)])
             .await
             .unwrap();
         assert!(!third[0].accepted);
@@ -685,7 +684,7 @@ mod tests {
             .act(
                 t.tok("crown"),
                 Tick(0),
-                vec![action("queen", "decree", None)],
+                vec![action("queen", "issue_edict", None)],
             )
             .await;
         assert!(matches!(
@@ -705,7 +704,7 @@ mod tests {
             .act(
                 t.tok("crown"),
                 Tick(1),
-                vec![action("queen", "decree", None)],
+                vec![action("queen", "issue_edict", None)],
             )
             .await;
         assert!(fresh.unwrap()[0].accepted);
@@ -722,7 +721,7 @@ mod tests {
                 .act(
                     t.tok("crown"),
                     Tick(0),
-                    vec![action("queen", "decree", None)]
+                    vec![action("queen", "issue_edict", None)]
                 )
                 .await,
             Err(GameError::TurnEnded)
@@ -802,7 +801,7 @@ mod tests {
                         character: "queen".into(),
                         text: "I marry the duke".into(),
                     },
-                    action("queen", "feast", Some("south")),
+                    action("queen", "relief", Some("south")),
                 ],
             )
             .await
@@ -816,7 +815,10 @@ mod tests {
             outcome: "A grand wedding".into(),
             public: true,
             effects: vec![Effect {
-                target: Target::Metric("order".into()),
+                target: Target::Metric {
+                    empire: "kingdom".into(),
+                    metric: "culture".into(),
+                },
                 delta: 0.2,
                 scaled_by: None,
             }],
@@ -840,9 +842,9 @@ mod tests {
             .unwrap();
         assert!(not_gm[0].error.as_deref().unwrap().contains("game-master"));
 
-        let before = t.metric("order").await;
+        let before = t.culture().await;
         t.game.force_close().await.unwrap();
-        assert!((t.metric("order").await - (before + 0.2)).abs() < 1e-9);
+        assert!((t.culture().await - (before + 0.2)).abs() < 1e-9);
     }
 
     #[tokio::test]
@@ -879,10 +881,14 @@ mod tests {
                 "A comet",
                 "",
                 vec![Effect {
-                    target: Target::Metric("order".into()),
+                    target: Target::Metric {
+                        empire: "kingdom".into(),
+                        metric: "stability".into(),
+                    },
                     delta: -0.1,
                     scaled_by: None,
                 }],
+                None,
             )
             .await
             .unwrap();
@@ -912,7 +918,7 @@ mod tests {
             .unwrap();
             let crown = &c.seat_tokens[&SeatId::from("crown")];
             c.game
-                .act(crown, Tick(0), vec![action("queen", "decree", None)])
+                .act(crown, Tick(0), vec![action("queen", "issue_edict", None)])
                 .await
                 .unwrap();
             c.game.force_close().await.unwrap();
@@ -934,7 +940,7 @@ mod tests {
             .act(
                 t.tok("crown"),
                 Tick(0),
-                vec![action("queen", "decree", None)],
+                vec![action("queen", "issue_edict", None)],
             )
             .await
             .unwrap();
@@ -956,8 +962,8 @@ mod tests {
                 t.tok("crown"),
                 Tick(0),
                 vec![
-                    action("queen", "decree", None),
-                    action("queen", "decree", None),
+                    action("queen", "issue_edict", None),
+                    action("queen", "issue_edict", None),
                 ],
             )
             .await

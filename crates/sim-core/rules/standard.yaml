@@ -1,0 +1,291 @@
+# The standard ruleset: the mechanics every world runs on. It names no setting. A scenario
+# supplies the empires, people and starting numbers; the theme's `terms` rename things for
+# the UI (e.g. currency -> denarii).
+
+metrics:
+  - id: treasury
+    name: Treasury
+    initial: 400
+    start_range: [200, 600]
+    visible_to: [head_of_state, official, commander, governor]
+  - { id: stability, name: Stability, initial: 0.6, start_range: [0.45, 0.75], min: 0, max: 1 }
+  - { id: legitimacy, name: Legitimacy of the ruler, initial: 0.55, start_range: [0.4, 0.7], min: 0, max: 1 }
+  - { id: military, name: Military strength, initial: 0.6, start_range: [0.4, 0.8], min: 0, max: 1 }
+  - { id: culture, name: Cultural flourishing, initial: 0.4, start_range: [0.2, 0.6], min: 0, max: 1 }
+
+region_stats:
+  - { id: population, name: Population (millions), initial: 3, start_range: [1, 8], min: 0 }
+  - { id: wealth, name: Wealth, initial: 0.5, start_range: [0.25, 0.75], min: 0, max: 1 }
+  - { id: food, name: Food stores, initial: 0.6, start_range: [0.4, 0.8], min: 0, max: 1 }
+  - { id: unrest, name: Unrest, initial: 0.2, start_range: [0.1, 0.4], min: 0, max: 1 }
+  - { id: fertility, name: Fertility, initial: 1, start_range: [0.6, 1.4], min: 0, max: 2 }
+  - { id: frontier, name: Frontier exposure, initial: 0, start_range: [0, 0.4], min: 0, max: 1 }
+
+resources:
+  - { id: influence, name: Influence, initial: 3, start_range: [1, 5], min: 0 }
+  - { id: fortune, name: Personal fortune, initial: 20, start_range: [10, 60], min: 0 }
+
+offices:
+  - id: head_of_state
+    name: Head of state
+    description: Rules the empire. Commands its treasury, its provinces and the loyalty of its armies.
+    public: true
+    actions: [relief, raise_taxes, issue_edict, public_works]
+  - id: official
+    name: Official
+    description: Sits in the councils of state. Lives by influence, favours and intrigue.
+    actions: [support_ruler, oppose_ruler, bribe, conspire, attend_council]
+    default_action: attend_council
+  - id: commander
+    name: Commander
+    description: Leads the armies. Wins wars, holds frontiers, and could turn them on the capital.
+    actions: [campaign, garrison, train_army]
+  - id: governor
+    name: Governor
+    description: Administers a home province for the head of state.
+    actions: [administer, levy]
+    default_action: administer
+  - id: private
+    name: Private person
+    description: Holds no office. Acts through talent, words, wealth and the people they know.
+    actions: [create_work, denounce, bribe]
+  - id: cohort
+    name: Populace
+    description: The farmers, labourers, artisans and poor of one region, speaking as one.
+    region_sight: home
+    actions: [toil, protest, celebrate]
+    default_action: toil
+
+actions:
+  - id: relief
+    name: Relief and festivities
+    description: Free food and public spectacle for a region. Calms unrest, costs the treasury.
+    target: region
+    effects:
+      - { target: { metric: treasury }, delta: -40 }
+      - { target: { stat: unrest }, delta: -0.15 }
+      - { target: { stat: food }, delta: 0.1 }
+      - { target: { metric: legitimacy }, delta: 0.02 }
+  - id: raise_taxes
+    name: Raise taxes
+    description: Squeeze a region. Income grows with its wealth; so does resentment.
+    target: region
+    effects:
+      - { target: { metric: treasury }, delta: 80, scale_by: { stat: wealth } }
+      - { target: { stat: unrest }, delta: 0.12 }
+      - { target: { stat: wealth }, delta: -0.03 }
+  - id: issue_edict
+    name: Issue an edict
+    description: A moral or legal reform proclaimed across the empire.
+    cost: { influence: 2 }
+    effects:
+      - { target: { metric: legitimacy }, delta: 0.03 }
+      - { target: { metric: stability }, delta: 0.02 }
+  - id: public_works
+    name: Public works
+    description: Roads, waterworks, monuments. Expensive, but enriches a region and glorifies the empire.
+    target: region
+    effects:
+      - { target: { metric: treasury }, delta: -80 }
+      - { target: { stat: wealth }, delta: 0.05 }
+      - { target: { metric: culture }, delta: 0.02 }
+      - { target: { resource: influence }, delta: 1 }
+  - id: support_ruler
+    name: Support the ruler
+    description: Speak for the head of state in council.
+    effects:
+      - { target: { metric: legitimacy }, delta: 0.02 }
+      - { target: { resource: influence }, delta: 0.5 }
+  - id: oppose_ruler
+    name: Oppose the ruler
+    description: Speak against the head of state in council. Wins admirers among the discontented.
+    cost: { influence: 1 }
+    effects:
+      - { target: { metric: legitimacy }, delta: -0.03 }
+      - { target: { resource: influence }, delta: 1.5 }
+  - id: bribe
+    name: Bribe
+    description: Quietly pay another person for their favour.
+    target: character
+    secret: true
+    cost: { fortune: 10 }
+    effects:
+      - { target: { target_resource: fortune }, delta: 10 }
+      - { target: { resource: influence }, delta: 1 }
+  - id: conspire
+    name: Conspire
+    description: Plot in secret against the regime.
+    secret: true
+    cost: { influence: 2 }
+    effects:
+      - { target: { metric: legitimacy }, delta: -0.04 }
+      - { target: { metric: stability }, delta: -0.03 }
+  - id: attend_council
+    name: Attend council
+    description: Sit through the session, vote with the majority, keep up appearances.
+    effects:
+      - { target: { resource: influence }, delta: 0.3 }
+  - id: campaign
+    name: Campaign
+    description: Lead the army against a region's enemies. Costly, glorious, risky.
+    target: region
+    effects:
+      - { target: { metric: treasury }, delta: -50 }
+      - { target: { metric: military }, delta: -0.05 }
+      - { target: { stat: frontier }, delta: -0.2 }
+      - { target: { stat: unrest }, delta: -0.1 }
+      - { target: { resource: influence }, delta: 2 }
+  - id: garrison
+    name: Garrison
+    description: Station troops in a region to keep order.
+    target: region
+    effects:
+      - { target: { metric: treasury }, delta: -20 }
+      - { target: { stat: unrest }, delta: -0.12 }
+  - id: train_army
+    name: Train the army
+    description: Drill, recruit and equip.
+    effects:
+      - { target: { metric: treasury }, delta: -30 }
+      - { target: { metric: military }, delta: 0.06 }
+  - id: administer
+    name: Administer
+    description: Hear petitions, settle disputes and keep the home region running.
+    effects:
+      - { target: { stat: wealth }, delta: 0.01 }
+      - { target: { stat: unrest }, delta: -0.02 }
+      - { target: { resource: influence }, delta: 0.2 }
+  - id: levy
+    name: Levy
+    description: Collect extra dues from the home region for the treasury.
+    effects:
+      - { target: { metric: treasury }, delta: 40, scale_by: { stat: wealth } }
+      - { target: { stat: unrest }, delta: 0.08 }
+  - id: create_work
+    name: Create a work
+    description: Write, compose, build or perform something people will remember.
+    effects:
+      - { target: { metric: culture }, delta: 0.03 }
+      - { target: { metric: legitimacy }, delta: 0.01 }
+      - { target: { resource: influence }, delta: 1 }
+  - id: denounce
+    name: Denounce
+    description: Mock or accuse someone in words that will be repeated everywhere.
+    target: character
+    effects:
+      - { target: { target_resource: influence }, delta: -1 }
+      - { target: { metric: culture }, delta: 0.01 }
+  - id: toil
+    name: Toil
+    description: Work the land and the workshops.
+    effects:
+      - { target: { stat: wealth }, delta: 0.01 }
+      - { target: { stat: food }, delta: 0.03 }
+  - id: protest
+    name: Protest
+    description: Take to the streets.
+    effects:
+      - { target: { stat: unrest }, delta: 0.1 }
+      - { target: { metric: stability }, delta: -0.02 }
+  - id: celebrate
+    name: Celebrate
+    description: Festivals, rites and gatherings.
+    effects:
+      - { target: { stat: unrest }, delta: -0.05 }
+      - { target: { metric: culture }, delta: 0.005 }
+
+rules:
+  - id: harvest
+    scope: each_region
+    effects:
+      - { target: { stat: food }, delta: 0.05, scale_by: { stat: fertility } }
+  - id: consumption
+    scope: each_region
+    effects:
+      - { target: { stat: food }, delta: -0.06 }
+  - id: trade
+    effects:
+      - { target: { all_regions: food }, delta: 0.01 }
+  - id: tribute
+    scope: each_region
+    effects:
+      - { target: { metric: treasury }, delta: 10, scale_by: { stat: wealth } }
+  - id: army_upkeep
+    effects:
+      - { target: { metric: treasury }, delta: -25 }
+  - id: unrest_cools
+    scope: each_region
+    effects:
+      - { target: { stat: unrest }, delta: -0.02 }
+  - id: famine
+    label: Famine grips {region}
+    scope: each_region
+    when: { value: { stat: food }, below: 0.2, for_ticks: 2 }
+    effects:
+      - { target: { stat: population }, delta: -0.03, scale_by: { stat: population } }
+      - { target: { stat: unrest }, delta: 0.15 }
+  - id: riots
+    label: Riots break out in {region}
+    scope: each_region
+    when: { value: { stat: unrest }, above: 0.6 }
+    effects:
+      - { target: { metric: stability }, delta: -0.04 }
+      - { target: { stat: wealth }, delta: -0.03 }
+  - id: revolt
+    label: "{region} rises in open revolt"
+    scope: each_region
+    when: { value: { stat: unrest }, above: 0.85, for_ticks: 2 }
+    effects:
+      - { target: { metric: stability }, delta: -0.1 }
+      - { target: { metric: legitimacy }, delta: -0.05 }
+  - id: raids
+    label: Raiders strike across the frontier into {region}
+    scope: each_region
+    when: { value: { stat: frontier }, above: 0.2 }
+    chance: 0.25
+    effects:
+      - { target: { stat: wealth }, delta: -0.05 }
+      - { target: { stat: unrest }, delta: 0.1 }
+      - { target: { metric: military }, delta: -0.02 }
+  - id: plague
+    label: Plague strikes {region}
+    scope: each_region
+    chance: 0.01
+    effects:
+      - { target: { stat: population }, delta: -0.08, scale_by: { stat: population } }
+      - { target: { stat: unrest }, delta: 0.1 }
+  - id: empty_treasury
+    label: The treasury of {empire} is empty; soldiers and officials go unpaid
+    when: { value: { metric: treasury }, below: 0 }
+    effects:
+      - { target: { metric: stability }, delta: -0.05 }
+      - { target: { metric: military }, delta: -0.03 }
+  - id: weak_army
+    label: With the army of {empire} weakened, the frontiers grow bolder
+    when: { value: { metric: military }, below: 0.4 }
+    effects:
+      - { target: { all_regions: frontier }, delta: 0.05 }
+  - id: civil_war
+    label: "{empire} falls into civil war: rival claimants raise armies against each other"
+    when: { value: { metric: stability }, below: 0.1, for_ticks: 2 }
+    effects:
+      - { target: { metric: military }, delta: -0.05 }
+      - { target: { metric: legitimacy }, delta: -0.05 }
+      - { target: { all_regions: unrest }, delta: 0.05 }
+      - { target: { all_regions: wealth }, delta: -0.02 }
+  - id: weary_peace
+    label: Exhausted by strife, {empire} longs for order
+    when: { value: { metric: stability }, below: 0.2, for_ticks: 4 }
+    effects:
+      - { target: { metric: stability }, delta: 0.05 }
+  - id: defiance
+    label: The ruler of {empire} is openly defied; orders go unheeded
+    when: { value: { metric: legitimacy }, below: 0.1, for_ticks: 2 }
+    effects:
+      - { target: { metric: stability }, delta: -0.05 }
+  - id: golden_age
+    label: A golden age of arts and learning in {empire}
+    when: { value: { metric: culture }, above: 0.9, for_ticks: 4 }
+    effects:
+      - { target: { metric: stability }, delta: 0.02 }
+      - { target: { metric: legitimacy }, delta: 0.01 }

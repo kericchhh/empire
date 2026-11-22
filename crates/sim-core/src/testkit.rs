@@ -1,26 +1,41 @@
 use crate::engine::{self, Order, Ruling, Submission, TurnInput};
-use crate::event::Event;
+use crate::event::{Event, Target};
 use crate::ids::*;
+use crate::ruleset::Ruleset;
 use crate::scenario::Scenario;
 use crate::state::State;
+use crate::world::World;
 
 pub const TINY: &str = include_str!("../tests/fixtures/tiny.yaml");
+pub const TINY_RULES: &str = include_str!("../tests/fixtures/tiny_rules.yaml");
 pub const ROME: &str = include_str!("../../../scenarios/rome.yaml");
 
-pub struct World {
-    pub sc: Scenario,
+/// A world and its live state, advanced the way the server does it.
+pub struct Sim {
+    pub w: World,
     pub state: State,
 }
 
-impl World {
+impl Sim {
+    /// The tiny scenario on the tiny ruleset.
     pub fn tiny() -> Self {
-        Self::new(TINY, 7)
+        let sc = Scenario::from_yaml(TINY).expect("fixture scenario is valid");
+        let rules = Ruleset::from_yaml(TINY_RULES).expect("fixture ruleset is valid");
+        Self::start(World::new(sc, rules).expect("fixtures fit together"), 7)
     }
 
-    pub fn new(yaml: &str, seed: u64) -> Self {
-        let sc = Scenario::from_yaml(yaml).expect("fixture scenario is valid");
-        let state = State::replay(&sc, &engine::start(&sc, seed));
-        Self { sc, state }
+    /// Rome on the standard ruleset.
+    pub fn rome(seed: u64) -> Self {
+        let sc = Scenario::from_yaml(ROME).expect("rome is valid");
+        Self::start(
+            World::standard(sc).expect("rome fits the standard ruleset"),
+            seed,
+        )
+    }
+
+    pub fn start(w: World, seed: u64) -> Self {
+        let state = State::replay(&w, &engine::start(&w, seed));
+        Self { w, state }
     }
 
     pub fn push(&mut self, e: Event) {
@@ -28,23 +43,48 @@ impl World {
     }
 
     pub fn close(&mut self, inputs: &[TurnInput]) -> Vec<Event> {
-        let events = engine::close_tick(&self.sc, &self.state, inputs);
+        let events = engine::close_tick(&self.w, &self.state, inputs);
         for e in &events {
             self.state.apply(e);
         }
         events
     }
 
-    pub fn metric(&self, id: &str) -> f64 {
-        self.state.metrics[&MetricId::from(id)]
+    pub fn metric(&self, empire: &str, id: &str) -> f64 {
+        self.state.empires[&EmpireId::from(empire)].metrics[&MetricId::from(id)]
+    }
+
+    pub fn set_metric(&mut self, empire: &str, id: &str, v: f64) {
+        self.state
+            .empires
+            .get_mut(&EmpireId::from(empire))
+            .unwrap()
+            .metrics
+            .insert(id.into(), v);
     }
 
     pub fn stat(&self, region: &str, stat: &str) -> f64 {
-        self.state.regions[&RegionId::from(region)][&StatId::from(stat)]
+        self.state.regions[&RegionId::from(region)].stats[&StatId::from(stat)]
     }
 
     pub fn resource(&self, character: &str, res: &str) -> f64 {
         self.state.characters[&CharacterId::from(character)].resources[&ResourceId::from(res)]
+    }
+
+    pub fn set_resource(&mut self, character: &str, res: &str, v: f64) {
+        self.state
+            .characters
+            .get_mut(&CharacterId::from(character))
+            .unwrap()
+            .resources
+            .insert(res.into(), v);
+    }
+}
+
+pub fn metric(empire: &str, metric: &str) -> Target {
+    Target::Metric {
+        empire: empire.into(),
+        metric: metric.into(),
     }
 }
 

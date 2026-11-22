@@ -1,10 +1,18 @@
 ---
 source: crates/sim-core/tests/golden.rs
-assertion_line: 29
-expression: state.metrics
+expression: state.empires
 ---
-culture: 0.4
-legitimacy: 0.45
-military: 0.25999999999999956
-stability: 0
-treasury: 521.6000000000001
+parthia:
+  metrics:
+    culture: 0.43
+    legitimacy: 0
+    military: 0
+    stability: 0
+    treasury: -389.80999999999995
+rome:
+  metrics:
+    culture: 0.4
+    legitimacy: 0.45
+    military: 0.03999999999999958
+    stability: 0.05
+    treasury: 536.7

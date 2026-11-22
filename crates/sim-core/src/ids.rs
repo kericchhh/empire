@@ -33,11 +33,15 @@ macro_rules! string_id {
 string_id!(
     /// A slot that one external agent or human claims with a token.
     SeatId,
-    /// A named individual played by a seat.
+    /// A named individual, or a population group voiced as one, played by a seat.
     CharacterId,
-    RoleId,
+    /// A power on the map with its own territory, numbers and people.
+    EmpireId,
+    /// A position of power defined by the ruleset, such as head of state. It decides which
+    /// actions a character may take and which numbers they see.
+    OfficeId,
     RegionId,
-    /// An empire-wide number such as treasury or stability.
+    /// A per-empire number such as treasury or stability.
     MetricId,
     /// A per-region number such as population or unrest.
     StatId,
@@ -45,7 +49,6 @@ string_id!(
     ResourceId,
     ActionId,
     RuleId,
-    EndingId,
 );
 
 /// One step of simulation time.

@@ -1,8 +1,9 @@
-name: Rome under the First Princeps
+name: Rome and Parthia under the First Princeps
 description: >
   27 BC. The civil wars are over and Octavian, now hailed Augustus, holds power behind the
-  forms of the old Republic. The Senate still meets, the legions guard distant frontiers,
-  and the grain ships from Egypt keep the city fed. Will the new order endure?
+  forms of the old Republic. In the east, the Parthian King of Kings Phraates IV still holds
+  the eagles taken from Crassus, while a pretender backed by Roman money waits for his chance.
+  Two great powers face each other across the Euphrates.
 
 calendar:
   start_year: -27
@@ -10,355 +11,166 @@ calendar:
   negative_suffix: BC
   positive_suffix: AD
 
-culture:
-  religion: Roman polytheism; the cult of the deified Julius is rising
-  ideology: Republican institutions in form, rule by one man in practice
-  values: piety, honour, lineage, duty to the state, glory in conquest
-  lifestyle: Patrician households and clients in the city, farmers and slaves on the land
-
 theme:
   palette: ["#7a1f1f", "#c9a227", "#f3e9d2", "#2b2118"]
   font_display: Cinzel
   font_body: EB Garamond
   terms:
     currency: denarii
-    ruler: Princeps
     region: province
 
-metrics:
-  - { id: treasury, name: Treasury, initial: 400, visible_to: [emperor, senator, general] }
-  - { id: stability, name: Stability, initial: 0.6, min: 0, max: 1 }
-  - { id: legitimacy, name: Legitimacy of the Princeps, initial: 0.55, min: 0, max: 1 }
-  - { id: military, name: Military strength, initial: 0.7, min: 0, max: 1 }
-  - { id: culture, name: Cultural flourishing, initial: 0.4, min: 0, max: 1 }
+empires:
+  - id: rome
+    name: Rome
+    description: The Roman state, master of the Mediterranean from Hispania to Egypt.
+    culture:
+      religion: Roman polytheism; the cult of the deified Julius is rising
+      ideology: Republican institutions in form, rule by one man in practice
+      values: piety, honour, lineage, duty to the state, glory in conquest
+      lifestyle: Patrician households and clients in the city, farmers and slaves on the land
+    start: { treasury: 400, stability: 0.6, legitimacy: 0.55, military: 0.7, culture: 0.4 }
+    regions:
+      - id: italia
+        name: Italia
+        description: The heartland. Rome itself, a million mouths fed on imported grain.
+        start: { population: 7, wealth: 0.85, food: 0.5, fertility: 0.6, unrest: 0.25, frontier: 0 }
+      - id: gallia
+        name: Gallia
+        description: Recently conquered, still restless, rich in farmland.
+        start: { population: 6, wealth: 0.45, fertility: 1.0, unrest: 0.35, frontier: 0 }
+      - id: hispania
+        name: Hispania
+        description: Silver mines and mountain tribes not yet subdued.
+        start: { population: 4, wealth: 0.55, unrest: 0.3, frontier: 0.3 }
+      - id: aegyptus
+        name: Aegyptus
+        description: The Princeps' personal domain and the granary of Rome.
+        start: { population: 5, wealth: 0.7, food: 0.8, fertility: 1.6, frontier: 0 }
+      - id: germania
+        name: Germania frontier
+        description: The Rhine border, where the legions face the free tribes.
+        start: { population: 1.5, wealth: 0.25, unrest: 0.3, fertility: 0.7, frontier: 1 }
+    characters:
+      - id: augustus
+        name: Gaius Julius Caesar Augustus
+        title: Princeps
+        office: head_of_state
+        region: italia
+        persona: Cautious, patient, image-obsessed. Prefers the appearance of restored Republic to open monarchy.
+        goals: [Secure the succession, Keep the Senate pacified, Keep Rome fed, Recover the eagles of Crassus]
+        secrets: [His health is failing; he fears dying before an heir is ready]
+        start: { influence: 10, fortune: 200 }
+      - id: agrippa
+        name: Marcus Vipsanius Agrippa
+        title: Legate
+        office: commander
+        region: italia
+        persona: Blunt, loyal, brilliant in war and engineering. Disdains senatorial snobbery.
+        goals: [Pacify Hispania, Keep the legions loyal to Augustus]
+        secrets: [Some officers would back him over Augustus if offered]
+        start: { influence: 6, fortune: 60 }
+      - id: piso
+        name: Gnaeus Calpurnius Piso
+        title: Senator
+        office: official
+        region: italia
+        persona: Proud republican aristocrat who fought against Caesar. Sharp-tongued, principled, ambitious.
+        goals: [Restore real power to the Senate, Win a consulship]
+        secrets: [Corresponds with exiled republicans]
+        start: { influence: 3, fortune: 20 }
+      - id: sestius
+        name: Lucius Sestius
+        title: Senator
+        office: official
+        region: italia
+        persona: Pragmatic survivor. Supports whoever wins, collects favours from everyone.
+        goals: [Grow his fortune, Stay on the winning side]
+        start: { influence: 3, fortune: 50 }
+      - id: virgil
+        name: Publius Vergilius Maro
+        title: Poet
+        office: private
+        region: italia
+        persona: Shy, melancholic, devoted to his craft. Writing an epic of Rome's founding.
+        goals: [Finish the Aeneid, Keep his patron's favour without betraying his art]
+        start: { influence: 3, fortune: 20 }
+      - id: plebs_rome
+        name: The plebs of Italia
+        office: cohort
+        region: italia
+        persona: Crowded, hungry, proud of Rome. Loyal to whoever feeds and entertains them.
+        goals: [Bread, games, safety]
+      - id: farmers_gaul
+        name: The farmers of Gallia
+        office: cohort
+        region: gallia
+        persona: Conquered within living memory. Taxed, resentful, slowly learning Roman ways.
+        goals: [Keep their land, Pay less tribute]
+      - id: fellahin_egypt
+        name: The farmers of Aegyptus
+        office: cohort
+        region: aegyptus
+        persona: Ancient, patient, ruled by a succession of foreign masters. The Nile flood is everything.
+        goals: [A good flood, Fair grain prices]
+    seats:
+      - { id: princeps, name: The Princeps, controls: [augustus] }
+      - { id: senate, name: The Senate, controls: [piso, sestius] }
+      - { id: legate, name: The Legate, controls: [agrippa] }
+      - { id: poet, name: The Poet, controls: [virgil] }
+      - { id: people, name: The People, controls: [plebs_rome, farmers_gaul, fellahin_egypt] }
 
-region_stats:
-  - { id: population, name: Population (millions), initial: 3, min: 0 }
-  - { id: wealth, name: Wealth, initial: 0.5, min: 0, max: 1 }
-  - { id: grain, name: Grain stores, initial: 0.6, min: 0, max: 1 }
-  - { id: unrest, name: Unrest, initial: 0.2, min: 0, max: 1 }
-  - { id: fertility, name: Fertility, initial: 0.8, min: 0, max: 2 }
-  - { id: frontier, name: Frontier exposure, initial: 0, min: 0, max: 1 }
+  # Parthia sets no starting numbers: the engine draws them from the seed.
+  - id: parthia
+    name: Parthia
+    description: The Arsacid realm of the King of Kings, from the Euphrates to the Indus.
+    culture:
+      religion: Zoroastrian fire temples beside Greek and Babylonian gods
+      ideology: A King of Kings above great noble houses that can make and unmake kings
+      values: horsemanship, archery, lineage, hospitality, loyalty to one's house
+      lifestyle: Mounted nobles on great estates, Greek cities, Babylonian farmers along the rivers
+    regions:
+      - id: mesopotamia
+        name: Mesopotamia
+        description: The rich river lands around Ctesiphon and Seleucia, facing Roman Syria.
+      - id: media
+        name: Media
+        description: Highlands and horse pastures; the summer seat of kings.
+      - id: parthava
+        name: Parthava
+        description: The ancestral homeland in the northeast, open to the nomads of the steppe.
+    characters:
+      - id: phraates
+        name: Phraates IV
+        title: King of Kings
+        office: head_of_state
+        region: mesopotamia
+        persona: Ruthless and suspicious. Murdered his father and brothers for the throne, and fears the same fate.
+        goals: [Crush the pretender, Keep the great houses loyal, Keep Rome beyond the Euphrates]
+        secrets: [He would trade the eagles of Crassus for the safety of his throne]
+      - id: suren
+        name: Head of the House of Suren
+        title: Spahbed
+        office: commander
+        region: media
+        persona: Proud heir of the general who destroyed Crassus. Loyal to the throne while it honours his house.
+        goals: [Win glory against Rome, Keep his house first among the nobles]
+      - id: tiridates
+        name: Tiridates
+        title: Pretender
+        office: private
+        region: mesopotamia
+        persona: A noble who once seized the throne and lost it. Charming, reckless, courting Rome for help.
+        goals: [Take the throne, Win Roman support]
+        secrets: [He has promised Augustus the eagles in return for Roman backing]
+      - id: farmers_mesopotamia
+        name: The farmers of Mesopotamia
+        office: cohort
+        region: mesopotamia
+        persona: Babylonian villagers who have outlasted every empire. Canals and harvests matter more than kings.
+        goals: [Peaceful canals, Fair dues]
+    seats:
+      - { id: parthia, name: The King of Kings, controls: [phraates, suren] }
+      - { id: pretender, name: The Pretender, controls: [tiridates] }
+      - { id: villages, name: The Villages, controls: [farmers_mesopotamia] }
 
-resources:
-  - { id: influence, name: Influence, initial: 3, min: 0 }
-  - { id: purse, name: Personal fortune, initial: 20, min: 0 }
-
-regions:
-  - id: italia
-    name: Italia
-    description: The heartland. Rome itself, a million mouths fed on imported grain.
-    stats: { population: 7, wealth: 0.85, grain: 0.5, fertility: 0.6, unrest: 0.25 }
-  - id: gallia
-    name: Gallia
-    description: Recently conquered, still restless, rich in farmland.
-    stats: { population: 6, wealth: 0.45, fertility: 1.0, unrest: 0.35 }
-  - id: hispania
-    name: Hispania
-    description: Silver mines and mountain tribes not yet subdued.
-    stats: { population: 4, wealth: 0.55, unrest: 0.3, frontier: 0.3 }
-  - id: aegyptus
-    name: Aegyptus
-    description: The Princeps' personal domain and the granary of Rome.
-    stats: { population: 5, wealth: 0.7, grain: 0.8, fertility: 1.6 }
-  - id: germania
-    name: Germania frontier
-    description: The Rhine border, where the legions face the free tribes.
-    stats: { population: 1.5, wealth: 0.25, unrest: 0.3, fertility: 0.7, frontier: 1 }
-
-roles:
-  - id: emperor
-    name: Princeps
-    description: First citizen. Commands the treasury, the provinces and the loyalty of the legions.
-    actions: [bread_and_games, raise_taxes, issue_edict, public_works]
-  - id: senator
-    name: Senator
-    description: A member of the old aristocracy. Prestige, intrigue and the memory of the Republic.
-    actions: [support_princeps, oppose_princeps, bribe, conspire, attend_senate]
-    default_action: attend_senate
-  - id: general
-    name: Legate
-    description: Commander of legions. Wins wars, holds frontiers, and could march on Rome.
-    actions: [campaign, garrison, train_legions]
-  - id: poet
-    name: Poet
-    description: Writer under the patronage of the powerful. Shapes how Rome sees itself.
-    actions: [compose_work, satirize]
-  - id: people
-    name: The people
-    description: Farmers, labourers, artisans and the urban poor of one province.
-    actions: [toil, protest, worship]
-    default_action: toil
-    region_sight: home
-
-characters:
-  - id: augustus
-    name: Gaius Julius Caesar Augustus
-    role: emperor
-    region: italia
-    persona: Cautious, patient, image-obsessed. Prefers the appearance of restored Republic to open monarchy.
-    goals: [Secure the succession, Keep the Senate pacified, Keep Rome fed]
-    secrets: [His health is failing; he fears dying before an heir is ready]
-    resources: { influence: 10, purse: 200 }
-  - id: agrippa
-    name: Marcus Vipsanius Agrippa
-    role: general
-    region: italia
-    persona: Blunt, loyal, brilliant in war and engineering. Disdains senatorial snobbery.
-    goals: [Pacify Hispania, Keep the legions loyal to Augustus]
-    secrets: [Some officers would back him over Augustus if offered]
-    resources: { influence: 6, purse: 60 }
-  - id: piso
-    name: Gnaeus Calpurnius Piso
-    role: senator
-    region: italia
-    persona: Proud republican aristocrat who fought against Caesar. Sharp-tongued, principled, ambitious.
-    goals: [Restore real power to the Senate, Win a consulship]
-    secrets: [Corresponds with exiled republicans]
-  - id: maecenas_ally
-    name: Lucius Sestius
-    role: senator
-    region: italia
-    persona: Pragmatic survivor. Supports whoever wins, collects favours from everyone.
-    goals: [Grow his fortune, Stay on the winning side]
-    resources: { purse: 50 }
-  - id: virgil
-    name: Publius Vergilius Maro
-    role: poet
-    region: italia
-    persona: Shy, melancholic, devoted to his craft. Writing an epic of Rome's founding.
-    goals: [Finish the Aeneid, Keep his patron's favour without betraying his art]
-  - id: plebs_rome
-    name: The plebs of Italia
-    role: people
-    region: italia
-    persona: Crowded, hungry, proud of Rome. Loyal to whoever feeds and entertains them.
-    goals: [Bread, games, safety]
-  - id: farmers_gaul
-    name: The farmers of Gallia
-    role: people
-    region: gallia
-    persona: Conquered within living memory. Taxed, resentful, slowly learning Roman ways.
-    goals: [Keep their land, Pay less tribute]
-  - id: fellahin_egypt
-    name: The farmers of Aegyptus
-    role: people
-    region: aegyptus
-    persona: Ancient, patient, ruled by a succession of foreign masters. The Nile flood is everything.
-    goals: [A good flood, Fair grain prices]
-
-seats:
-  - { id: princeps, name: The Princeps, controls: [augustus] }
-  - { id: senate, name: The Senate, controls: [piso, maecenas_ally] }
-  - { id: legate, name: The Legate, controls: [agrippa] }
-  - { id: poet, name: The Poet, controls: [virgil] }
-  - { id: people, name: The People, controls: [plebs_rome, farmers_gaul, fellahin_egypt] }
-  - { id: gm, name: Game Master, game_master: true }
-
-actions:
-  - id: bread_and_games
-    name: Bread and games
-    description: Free grain and spectacles for a province. Calms unrest, costs the treasury.
-    target: region
-    effects:
-      - { target: { metric: treasury }, delta: -40 }
-      - { target: { stat: unrest }, delta: -0.15 }
-      - { target: { stat: grain }, delta: 0.1 }
-      - { target: { metric: legitimacy }, delta: 0.02 }
-  - id: raise_taxes
-    name: Raise taxes
-    description: Squeeze a province. Income grows with its wealth; so does resentment.
-    target: region
-    effects:
-      - { target: { metric: treasury }, delta: 80, scale_by: { stat: wealth } }
-      - { target: { stat: unrest }, delta: 0.12 }
-      - { target: { stat: wealth }, delta: -0.03 }
-  - id: issue_edict
-    name: Issue an edict
-    description: A moral or legal reform proclaimed across the empire.
-    cost: { influence: 2 }
-    effects:
-      - { target: { metric: legitimacy }, delta: 0.03 }
-      - { target: { metric: stability }, delta: 0.02 }
-  - id: public_works
-    name: Public works
-    description: Roads, aqueducts, temples. Expensive, but enriches a province and glorifies Rome.
-    target: region
-    effects:
-      - { target: { metric: treasury }, delta: -80 }
-      - { target: { stat: wealth }, delta: 0.05 }
-      - { target: { metric: culture }, delta: 0.02 }
-      - { target: { resource: influence }, delta: 1 }
-  - id: support_princeps
-    name: Support the Princeps
-    description: Speak for the Princeps in the Senate.
-    effects:
-      - { target: { metric: legitimacy }, delta: 0.02 }
-      - { target: { resource: influence }, delta: 0.5 }
-  - id: oppose_princeps
-    name: Oppose the Princeps
-    description: Speak against the Princeps in the Senate. Wins republican admirers.
-    cost: { influence: 1 }
-    effects:
-      - { target: { metric: legitimacy }, delta: -0.03 }
-      - { target: { resource: influence }, delta: 1.5 }
-  - id: bribe
-    name: Bribe
-    description: Quietly pay another person for their favour.
-    target: character
-    secret: true
-    cost: { purse: 10 }
-    effects:
-      - { target: { target_resource: purse }, delta: 10 }
-      - { target: { resource: influence }, delta: 1 }
-  - id: conspire
-    name: Conspire
-    description: Plot in secret against the regime.
-    secret: true
-    cost: { influence: 2 }
-    effects:
-      - { target: { metric: legitimacy }, delta: -0.04 }
-      - { target: { metric: stability }, delta: -0.03 }
-  - id: attend_senate
-    name: Attend the Senate
-    description: Sit through the session, vote with the majority, keep up appearances.
-    effects:
-      - { target: { resource: influence }, delta: 0.3 }
-  - id: campaign
-    name: Campaign
-    description: Lead the legions against a province's enemies. Costly, glorious, risky.
-    target: region
-    effects:
-      - { target: { metric: treasury }, delta: -50 }
-      - { target: { metric: military }, delta: -0.05 }
-      - { target: { stat: frontier }, delta: -0.2 }
-      - { target: { stat: unrest }, delta: -0.1 }
-      - { target: { resource: influence }, delta: 2 }
-  - id: garrison
-    name: Garrison
-    description: Station troops in a province to keep order.
-    target: region
-    effects:
-      - { target: { metric: treasury }, delta: -20 }
-      - { target: { stat: unrest }, delta: -0.12 }
-  - id: train_legions
-    name: Train the legions
-    description: Drill, recruit and equip.
-    effects:
-      - { target: { metric: treasury }, delta: -30 }
-      - { target: { metric: military }, delta: 0.06 }
-  - id: compose_work
-    name: Compose a work
-    description: Write and recite a new work.
-    effects:
-      - { target: { metric: culture }, delta: 0.03 }
-      - { target: { metric: legitimacy }, delta: 0.01 }
-      - { target: { resource: influence }, delta: 1 }
-  - id: satirize
-    name: Satirize
-    description: Mock someone in verse that will be repeated in every tavern.
-    target: character
-    effects:
-      - { target: { target_resource: influence }, delta: -1 }
-      - { target: { metric: culture }, delta: 0.01 }
-  - id: toil
-    name: Toil
-    description: Work the land and the workshops.
-    effects:
-      - { target: { stat: wealth }, delta: 0.01 }
-      - { target: { stat: grain }, delta: 0.03 }
-  - id: protest
-    name: Protest
-    description: Take to the streets.
-    effects:
-      - { target: { stat: unrest }, delta: 0.1 }
-      - { target: { metric: stability }, delta: -0.02 }
-  - id: worship
-    name: Worship
-    description: Festivals, sacrifices, processions.
-    effects:
-      - { target: { stat: unrest }, delta: -0.05 }
-      - { target: { metric: culture }, delta: 0.005 }
-
-rules:
-  - id: harvest
-    scope: each_region
-    effects:
-      - { target: { stat: grain }, delta: 0.05, scale_by: { stat: fertility } }
-  - id: consumption
-    scope: each_region
-    effects:
-      - { target: { stat: grain }, delta: -0.06 }
-  - id: grain_trade
-    effects:
-      - { target: { all_regions: grain }, delta: 0.01 }
-  - id: tribute
-    scope: each_region
-    effects:
-      - { target: { metric: treasury }, delta: 10, scale_by: { stat: wealth } }
-  - id: army_upkeep
-    effects:
-      - { target: { metric: treasury }, delta: -25 }
-  - id: unrest_cools
-    scope: each_region
-    effects:
-      - { target: { stat: unrest }, delta: -0.02 }
-  - id: famine
-    label: Famine grips {region}
-    scope: each_region
-    when: { value: { stat: grain }, below: 0.2, for_ticks: 2 }
-    effects:
-      - { target: { stat: population }, delta: -0.03, scale_by: { stat: population } }
-      - { target: { stat: unrest }, delta: 0.15 }
-  - id: riots
-    label: Riots break out in {region}
-    scope: each_region
-    when: { value: { stat: unrest }, above: 0.6 }
-    effects:
-      - { target: { metric: stability }, delta: -0.04 }
-      - { target: { stat: wealth }, delta: -0.03 }
-  - id: revolt
-    label: "{region} rises in open revolt"
-    scope: each_region
-    when: { value: { stat: unrest }, above: 0.85, for_ticks: 2 }
-    effects:
-      - { target: { metric: stability }, delta: -0.1 }
-      - { target: { metric: legitimacy }, delta: -0.05 }
-  - id: raids
-    label: Tribes raid across the border into {region}
-    scope: each_region
-    when: { value: { stat: frontier }, above: 0.2 }
-    chance: 0.25
-    effects:
-      - { target: { stat: wealth }, delta: -0.05 }
-      - { target: { stat: unrest }, delta: 0.1 }
-      - { target: { metric: military }, delta: -0.02 }
-  - id: plague
-    label: Plague strikes {region}
-    scope: each_region
-    chance: 0.01
-    effects:
-      - { target: { stat: population }, delta: -0.08, scale_by: { stat: population } }
-      - { target: { stat: unrest }, delta: 0.1 }
-  - id: empty_treasury
-    label: The treasury is empty; soldiers and officials go unpaid
-    when: { value: { metric: treasury }, below: 0 }
-    effects:
-      - { target: { metric: stability }, delta: -0.05 }
-      - { target: { metric: military }, delta: -0.03 }
-  - id: weak_army
-    label: With the legions weakened, the frontiers grow bolder
-    when: { value: { metric: military }, below: 0.4 }
-    effects:
-      - { target: { all_regions: frontier }, delta: 0.05 }
-
-endings:
-  - id: civil_war
-    label: Stability collapses. Legions proclaim rival emperors and Rome falls into civil war.
-    when: { value: { metric: stability }, below: 0.1, for_ticks: 2 }
-  - id: overthrown
-    label: The Princeps has lost all legitimacy. The Senate and the guard depose him.
-    when: { value: { metric: legitimacy }, below: 0.1, for_ticks: 2 }
-  - id: golden_age
-    label: A golden age. Poets, builders and peace make this the age Rome will remember forever.
-    when: { value: { metric: culture }, above: 0.9, for_ticks: 4 }
+game_master: { id: gm, name: Game Master }

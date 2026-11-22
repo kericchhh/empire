@@ -1,6 +1,6 @@
 # Empire
 
-A sandbox for simulating an empire's whole life: politics, war, economy, culture and daily life. You describe the world in a scenario file. Agents from **any harness** (Codex, Claude Code, any MCP client) each take a seat and play its characters, and the world rises or falls from what they do.
+A sandbox for simulating empires sharing one world: politics, war, economy, culture and daily life. You describe the starting point in a scenario file: the empires, their cultures and their people. Agents from **any harness** (Codex, Claude Code, any MCP client) each take a seat and play its characters, and the world rises or falls from what they do.
 
 The server never calls a model. Agents connect to it, the same way a player joins a multiplayer game.
 
@@ -33,18 +33,18 @@ claude mcp add --transport http empire http://127.0.0.1:7878/mcp
 
 Then give the agent its seat token and a prompt like:
 
-> You are playing the seat with token `<token>` in the Empire simulation (MCP server `empire`). Call `join`, then loop: `wait_for_turn`, read your perception, use `message` and `note` if useful, `act`, `end_turn`. Keep going until the status is `world_ended`.
+> You are playing the seat with token `<token>` in the Empire simulation (MCP server `empire`). Call `join`, then loop: `wait_for_turn`, read your perception, use `message` and `note` if useful, `act`, `end_turn`. The world has no ending: keep playing until the server stops.
 
 ### Seat tools
 
 | Tool | Purpose |
 |---|---|
 | `join` | Claim the seat. Returns your characters, goals, secrets, actions and what you can see. |
-| `wait_for_turn` | Long-poll (up to 25 s). Returns `your_turn` with fresh perception, `waiting`, or `world_ended`. |
+| `wait_for_turn` | Long-poll (up to 25 s). Returns `your_turn` with fresh perception, or `waiting`. |
 | `look` | Re-read your perception mid-tick, e.g. after a message arrives. |
 | `act` | Queue orders: a listed action, or a free-form attempt for the game master to rule on. Each order is accepted or rejected with a reason. |
-| `rule` | Game master only: rule on pending free-form actions, with effects bounded by the scenario. |
-| `message` | A private message from one of your characters to another character. |
+| `rule` | Game master only: rule on pending free-form actions, with effects bounded by the ruleset. |
+| `message` | A private message from one of your characters to anyone in your empire, or to a foreign head of state. |
 | `note` | A private memory, shown back to you every turn. |
 | `end_turn` | Finish the tick. It closes when every joined seat has ended its turn, or at the deadline. |
 
@@ -62,12 +62,16 @@ curl -H "Authorization: Bearer $ADMIN" "localhost:7878/api/events?after=0"   # t
 curl -X POST -H "Authorization: Bearer $ADMIN" localhost:7878/api/tick       # close the tick now
 curl -X POST -H "Authorization: Bearer $ADMIN" -H 'content-type: application/json' \
   localhost:7878/api/intervene \
-  -d '{"title":"A plague ship docks at Ostia","effects":[{"target":{"stat":{"region":"italia","stat":"unrest"}},"delta":0.2}]}'
+  -d '{"title":"A plague ship docks at Ostia","empire":"rome","effects":[{"target":{"stat":{"region":"italia","stat":"unrest"}},"delta":0.2}]}'
 ```
+
+`empire` is optional: with it, only that empire's seats hear of the event.
 
 ## Write a scenario
 
-A scenario defines the calendar, culture, theme, metrics, regions, roles, characters, seats, actions, rules and endings. Start from `scenarios/rome.yaml`, and point your editor at `schema/scenario.schema.json` for autocomplete. Effects, rules and endings are plain data, so the same engine runs any setting.
+A scenario is the starting point and nothing more: the calendar, the theme, the empires with their culture and regions, the characters with their persona, goals, secrets and the office they hold, and the seats that play them. Start from `scenarios/rome.yaml`, and point your editor at `schema/scenario.schema.json` for autocomplete.
+
+Starting numbers are optional. Set them under `start` on an empire, region or character; anything you leave out is drawn from the seed. The mechanics (numbers, offices, actions, rules) come from the engine's standard ruleset in `crates/sim-core/rules/standard.yaml`, the same for every setting. There are no endings: the world runs until you stop it.
 
 ## Develop
 
