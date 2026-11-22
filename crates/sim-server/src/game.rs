@@ -108,9 +108,10 @@ pub struct Created {
 }
 
 fn token() -> String {
-    let bytes: [u8; 16] = rand::random();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    format!("{:032x}", rand::random::<u128>())
 }
+
+type Guard<'a> = tokio::sync::MutexGuard<'a, Inner>;
 
 impl Game {
     /// Resume the world stored in `store`, or create it from `scenario_yaml` if the store is empty.
@@ -143,27 +144,25 @@ impl Game {
             }
         };
         let state = State::replay(&w, &events);
-        let (tick_tx, _) = watch::channel(state.tick);
-        let (events_tx, _) = tokio::sync::broadcast::channel(1024);
         let inner = Inner {
             tokens: seat_tokens
                 .iter()
                 .map(|(s, t)| (t.clone(), s.clone()))
                 .collect(),
+            last_seq: events.len() as i64,
             w,
-            state,
             queued: BTreeMap::new(),
             ended_turn: BTreeSet::new(),
             tick_opened: Instant::now(),
-            last_seq: events.len() as i64,
+            state,
         };
         Ok(Created {
             game: Game {
+                tick_tx: Arc::new(watch::channel(inner.state.tick).0),
                 inner: Arc::new(Mutex::new(inner)),
                 store,
                 config,
-                tick_tx: Arc::new(tick_tx),
-                events_tx,
+                events_tx: tokio::sync::broadcast::channel(1024).0,
             },
             admin_token,
             seat_tokens,
@@ -185,41 +184,54 @@ impl Game {
         }
         let last = self.store.append(&events).await?;
         let first = last - events.len() as i64 + 1;
-        for (i, e) in events.into_iter().enumerate() {
+        for (seq, e) in (first..).zip(events) {
             inner.state.apply(&e);
-            let _ = self.events_tx.send((first + i as i64, e));
+            let _ = self.events_tx.send((seq, e));
         }
         inner.last_seq = last;
         Ok(())
     }
 
-    fn seat(inner: &Inner, token: &str) -> Result<SeatId, GameError> {
-        inner
-            .tokens
-            .get(token)
-            .cloned()
-            .ok_or(GameError::UnknownToken)
+    /// Lock the world and find the seat that holds `token`.
+    async fn seat(&self, token: &str) -> Result<(Guard<'_>, SeatId), GameError> {
+        let inner = self.inner.lock().await;
+        let seat = inner.tokens.get(token).cloned();
+        seat.map(|s| (inner, s)).ok_or(GameError::UnknownToken)
+    }
+
+    /// Like `seat`, for decisions. Orders, rulings and end_turn name the tick they were
+    /// decided in, so a decision made on old perception never lands in a later tick.
+    async fn turn(&self, token: &str, tick: Tick) -> Result<(Guard<'_>, SeatId), GameError> {
+        let (inner, seat) = self.seat(token).await?;
+        if tick != inner.state.tick {
+            return Err(GameError::StaleTick {
+                current: inner.state.tick,
+            });
+        }
+        if inner.ended_turn.contains(&seat) {
+            return Err(GameError::TurnEnded);
+        }
+        Ok((inner, seat))
     }
 
     fn view(inner: &Inner, seat: &SeatId) -> TurnView {
-        let status = if inner.ended_turn.contains(seat) {
-            TurnStatus::Waiting
-        } else {
-            TurnStatus::YourTurn
-        };
+        let waiting = inner.ended_turn.contains(seat);
         TurnView {
-            status,
+            status: if waiting {
+                TurnStatus::Waiting
+            } else {
+                TurnStatus::YourTurn
+            },
             tick: inner.state.tick,
             date: inner.w.date(inner.state.tick),
-            perception: (status != TurnStatus::Waiting)
+            perception: (!waiting)
                 .then(|| perceive(&inner.w, &inner.state, seat))
                 .flatten(),
         }
     }
 
     pub async fn join(&self, token: &str) -> Result<TurnView, GameError> {
-        let mut inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
+        let (mut inner, seat) = self.seat(token).await?;
         if let Some(e) = engine::join(&inner.w, &inner.state, &seat)? {
             self.commit(&mut inner, vec![e]).await?;
         }
@@ -227,11 +239,11 @@ impl Game {
     }
 
     pub async fn look(&self, token: &str) -> Result<TurnView, GameError> {
-        let inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
-        let mut v = Self::view(&inner, &seat);
-        v.perception = perceive(&inner.w, &inner.state, &seat);
-        Ok(v)
+        let (inner, seat) = self.seat(token).await?;
+        Ok(TurnView {
+            perception: perceive(&inner.w, &inner.state, &seat),
+            ..Self::view(&inner, &seat)
+        })
     }
 
     /// Returns at once when it is the seat's turn, otherwise waits up to `max_wait` for the
@@ -245,37 +257,49 @@ impl Game {
         let mut rx = self.tick_tx.subscribe();
         loop {
             {
-                let inner = self.inner.lock().await;
-                let seat = Self::seat(&inner, token)?;
+                let (inner, seat) = self.seat(token).await?;
                 let v = Self::view(&inner, &seat);
-                if v.status != TurnStatus::Waiting {
+                if v.status != TurnStatus::Waiting || Instant::now() >= deadline {
                     return Ok(v);
                 }
                 rx.mark_unchanged();
             }
-            if tokio::time::timeout_at(deadline, rx.changed())
-                .await
-                .is_err()
-            {
-                let inner = self.inner.lock().await;
-                let seat = Self::seat(&inner, token)?;
-                return Ok(Self::view(&inner, &seat));
-            }
+            let _ = tokio::time::timeout_at(deadline, rx.changed()).await;
         }
     }
 
-    /// Orders, rulings and end_turn name the tick they were decided in, so a decision made
-    /// on old perception never lands in a later tick.
-    fn check_turn(inner: &Inner, seat: &SeatId, tick: Tick) -> Result<(), GameError> {
-        if tick != inner.state.tick {
-            return Err(GameError::StaleTick {
-                current: inner.state.tick,
+    /// Validate each item with `check` against what the seat already queued this tick, and
+    /// queue the ones that pass.
+    async fn queue<T>(
+        &self,
+        token: &str,
+        tick: Tick,
+        items: Vec<T>,
+        check: impl Fn(&Inner, &SeatId, &[TurnInput], &T) -> Result<(), String>,
+        submission: impl Fn(T) -> Submission,
+    ) -> Result<Vec<OrderResult>, GameError> {
+        let (mut inner, seat) = self.turn(token, tick).await?;
+        let mut results = Vec::with_capacity(items.len());
+        for (index, item) in items.into_iter().enumerate() {
+            let queued = inner.queued.get(&seat).map_or(&[][..], Vec::as_slice);
+            let error = check(&inner, &seat, queued, &item).err();
+            if error.is_none() {
+                inner
+                    .queued
+                    .entry(seat.clone())
+                    .or_default()
+                    .push(TurnInput {
+                        seat: seat.clone(),
+                        submission: submission(item),
+                    });
+            }
+            results.push(OrderResult {
+                index,
+                accepted: error.is_none(),
+                error,
             });
         }
-        if inner.ended_turn.contains(seat) {
-            return Err(GameError::TurnEnded);
-        }
-        Ok(())
+        Ok(results)
     }
 
     pub async fn act(
@@ -284,45 +308,22 @@ impl Game {
         tick: Tick,
         orders: Vec<Order>,
     ) -> Result<Vec<OrderResult>, GameError> {
-        let mut inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
-        Self::check_turn(&inner, &seat, tick)?;
-        let limit = inner.w.rules.limits.orders_per_character;
-        let mut results = Vec::with_capacity(orders.len());
-        for (index, order) in orders.into_iter().enumerate() {
-            let used = inner
-                .queued
-                .get(&seat)
-                .into_iter()
-                .flatten()
+        let check = |inner: &Inner, seat: &SeatId, queued: &[TurnInput], order: &Order| {
+            let limit = inner.w.rules.limits.orders_per_character;
+            let used = queued
+                .iter()
                 .filter(|i| matches!(&i.submission, Submission::Order(o) if o.character() == order.character()))
                 .count();
-            let check = if used >= limit {
-                Err(format!(
+            if used >= limit {
+                return Err(format!(
                     "{} already has {limit} orders this tick",
                     order.character()
-                ))
-            } else {
-                engine::check_order(&inner.w, &inner.state, &seat, &order)
-                    .map_err(|e| e.to_string())
-            };
-            if check.is_ok() {
-                inner
-                    .queued
-                    .entry(seat.clone())
-                    .or_default()
-                    .push(TurnInput {
-                        seat: seat.clone(),
-                        submission: Submission::Order(order),
-                    });
+                ));
             }
-            results.push(OrderResult {
-                index,
-                accepted: check.is_ok(),
-                error: check.err(),
-            });
-        }
-        Ok(results)
+            engine::check_order(&inner.w, &inner.state, seat, order).map_err(|e| e.to_string())
+        };
+        self.queue(token, tick, orders, check, Submission::Order)
+            .await
     }
 
     pub async fn rule(
@@ -331,40 +332,19 @@ impl Game {
         tick: Tick,
         rulings: Vec<Ruling>,
     ) -> Result<Vec<OrderResult>, GameError> {
-        let mut inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
-        Self::check_turn(&inner, &seat, tick)?;
-        let mut results = Vec::with_capacity(rulings.len());
-        for (index, ruling) in rulings.into_iter().enumerate() {
-            let already = inner.queued.get(&seat).into_iter().flatten().any(
+        let check = |inner: &Inner, seat: &SeatId, queued: &[TurnInput], ruling: &Ruling| {
+            if queued.iter().any(
                 |i| matches!(&i.submission, Submission::Ruling(r) if r.pending_id == ruling.pending_id),
-            );
-            let check = if already {
-                Err(format!(
+            ) {
+                return Err(format!(
                     "`{}` already has a ruling this tick",
                     ruling.pending_id
-                ))
-            } else {
-                engine::check_ruling(&inner.w, &inner.state, &seat, &ruling)
-                    .map_err(|e| e.to_string())
-            };
-            if check.is_ok() {
-                inner
-                    .queued
-                    .entry(seat.clone())
-                    .or_default()
-                    .push(TurnInput {
-                        seat: seat.clone(),
-                        submission: Submission::Ruling(ruling),
-                    });
+                ));
             }
-            results.push(OrderResult {
-                index,
-                accepted: check.is_ok(),
-                error: check.err(),
-            });
-        }
-        Ok(results)
+            engine::check_ruling(&inner.w, &inner.state, seat, ruling).map_err(|e| e.to_string())
+        };
+        self.queue(token, tick, rulings, check, Submission::Ruling)
+            .await
     }
 
     pub async fn message(
@@ -374,8 +354,7 @@ impl Game {
         to: &CharacterId,
         text: &str,
     ) -> Result<(), GameError> {
-        let mut inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
+        let (mut inner, seat) = self.seat(token).await?;
         let e = engine::message(&inner.w, &inner.state, &seat, from, to, text)?;
         self.commit(&mut inner, vec![e]).await
     }
@@ -386,23 +365,25 @@ impl Game {
         character: &CharacterId,
         text: &str,
     ) -> Result<(), GameError> {
-        let mut inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
+        let (mut inner, seat) = self.seat(token).await?;
         let e = engine::note(&inner.w, &inner.state, &seat, character, text)?;
         self.commit(&mut inner, vec![e]).await
     }
 
     pub async fn end_turn(&self, token: &str, tick: Tick) -> Result<EndTurnView, GameError> {
-        let mut inner = self.inner.lock().await;
-        let seat = Self::seat(&inner, token)?;
-        Self::check_turn(&inner, &seat, tick)?;
+        let (mut inner, seat) = self.turn(token, tick).await?;
         if !inner.state.joined.contains(&seat)
             && let Some(e) = engine::join(&inner.w, &inner.state, &seat)?
         {
             self.commit(&mut inner, vec![e]).await?;
         }
         inner.ended_turn.insert(seat.clone());
-        let waiting_for = Self::waiting_for(&inner);
+        let waiting_for: Vec<SeatId> = inner
+            .state
+            .joined
+            .difference(&inner.ended_turn)
+            .cloned()
+            .collect();
         let tick_closed = waiting_for.is_empty();
         if tick_closed && let Err(e) = self.close(&mut inner).await {
             inner.ended_turn.remove(&seat);
@@ -412,16 +393,6 @@ impl Game {
             tick_closed,
             waiting_for,
         })
-    }
-
-    fn waiting_for(inner: &Inner) -> Vec<SeatId> {
-        inner
-            .state
-            .joined
-            .iter()
-            .filter(|s| !inner.ended_turn.contains(*s))
-            .cloned()
-            .collect()
     }
 
     async fn close(&self, inner: &mut Inner) -> Result<(), GameError> {
@@ -512,6 +483,11 @@ mod tests {
 
     const TINY: &str = include_str!("../../sim-core/tests/fixtures/tiny.yaml");
 
+    const SLOW: Config = Config {
+        tick_deadline: Duration::from_secs(3600),
+        autoplay: false,
+    };
+
     struct T {
         game: Game,
         tokens: BTreeMap<SeatId, String>,
@@ -527,16 +503,34 @@ mod tests {
             }
         }
 
-        async fn tiny() -> Self {
-            Self::new(Config {
-                tick_deadline: Duration::from_secs(3600),
-                autoplay: false,
-            })
-            .await
+        /// A world where `seats` have joined and the deadline never comes.
+        async fn with(seats: &[&str]) -> Self {
+            let t = Self::new(SLOW).await;
+            for s in seats {
+                t.game.join(t.tok(s)).await.unwrap();
+            }
+            t
         }
 
         fn tok(&self, seat: &str) -> &str {
             &self.tokens[&SeatId::from(seat)]
+        }
+
+        async fn act(
+            &self,
+            seat: &str,
+            tick: u64,
+            orders: Vec<Order>,
+        ) -> Result<Vec<OrderResult>, GameError> {
+            self.game.act(self.tok(seat), Tick(tick), orders).await
+        }
+
+        async fn end_turn(&self, seat: &str) -> Result<EndTurnView, GameError> {
+            self.game.end_turn(self.tok(seat), Tick(0)).await
+        }
+
+        async fn status(&self, seat: &str) -> TurnStatus {
+            self.game.look(self.tok(seat)).await.unwrap().status
         }
 
         /// A kingdom metric. Tests use culture: in this fixture no standard rule moves it,
@@ -559,79 +553,71 @@ mod tests {
         }
     }
 
+    fn edict() -> Order {
+        action("queen", "issue_edict", None)
+    }
+
+    fn kingdom(metric: &str, delta: f64) -> Effect {
+        Effect {
+            target: Target::Metric {
+                empire: "kingdom".into(),
+                metric: metric.into(),
+            },
+            delta,
+            scaled_by: None,
+        }
+    }
+
+    fn accepted(r: &[OrderResult]) -> Vec<bool> {
+        r.iter().map(|o| o.accepted).collect()
+    }
+
     #[tokio::test]
     async fn unknown_tokens_are_refused_everywhere() {
-        let t = T::tiny().await;
-        assert!(matches!(
-            t.game.join("nope").await,
-            Err(GameError::UnknownToken)
-        ));
-        assert!(matches!(
-            t.game.look("nope").await,
-            Err(GameError::UnknownToken)
-        ));
-        assert!(matches!(
-            t.game.act("nope", Tick(0), vec![]).await,
-            Err(GameError::UnknownToken)
-        ));
-        assert!(matches!(
-            t.game.end_turn("nope", Tick(0)).await,
-            Err(GameError::UnknownToken)
-        ));
+        let t = T::with(&[]).await;
+        let g = &t.game;
+        assert!(matches!(g.join("nope").await, Err(GameError::UnknownToken)));
+        assert!(matches!(g.look("nope").await, Err(GameError::UnknownToken)));
+        let acted = g.act("nope", Tick(0), vec![]).await;
+        assert!(matches!(acted, Err(GameError::UnknownToken)));
+        let ended = g.end_turn("nope", Tick(0)).await;
+        assert!(matches!(ended, Err(GameError::UnknownToken)));
     }
 
     #[tokio::test]
     async fn join_returns_the_seats_perception() {
-        let t = T::tiny().await;
+        let t = T::with(&[]).await;
         let v = t.game.join(t.tok("crown")).await.unwrap();
         assert_eq!(v.status, TurnStatus::YourTurn);
         let p = v.perception.unwrap();
         assert_eq!(p.you_play[0].id, CharacterId::from("queen"));
-        assert!(
-            p.recent
-                .iter()
-                .any(|l| l.contains("The Crown has taken their seat"))
-        );
+        let joined = "The Crown has taken their seat";
+        assert!(p.recent.iter().any(|l| l.contains(joined)));
     }
 
     #[tokio::test]
     async fn the_tick_closes_only_when_every_joined_seat_has_ended_its_turn() {
-        let t = T::tiny().await;
-        t.game.join(t.tok("crown")).await.unwrap();
-        t.game.join(t.tok("rival")).await.unwrap();
-
-        let first = t.game.end_turn(t.tok("crown"), Tick(0)).await.unwrap();
+        let t = T::with(&["crown", "rival"]).await;
+        let first = t.end_turn("crown").await.unwrap();
         assert!(!first.tick_closed);
         assert_eq!(first.waiting_for, [SeatId::from("rival")]);
         assert_eq!(t.tick().await, Tick(0));
 
-        let second = t.game.end_turn(t.tok("rival"), Tick(0)).await.unwrap();
-        assert!(second.tick_closed);
+        assert!(t.end_turn("rival").await.unwrap().tick_closed);
         assert_eq!(t.tick().await, Tick(1));
-        assert_eq!(
-            t.game.look(t.tok("crown")).await.unwrap().status,
-            TurnStatus::YourTurn
-        );
+        assert_eq!(t.status("crown").await, TurnStatus::YourTurn);
     }
 
     #[tokio::test]
     async fn orders_are_validated_on_submission_and_resolved_at_close() {
-        let t = T::tiny().await;
+        let t = T::with(&[]).await;
+        let works = |c| action(c, "public_works", Some("north"));
+        let fly = action("queen", "fly", None);
         let r = t
-            .game
-            .act(
-                t.tok("crown"),
-                Tick(0),
-                vec![
-                    action("queen", "public_works", Some("north")),
-                    action("queen", "fly", None),
-                    action("duke", "public_works", Some("north")),
-                ],
-            )
+            .act("crown", 0, vec![works("queen"), fly, works("duke")])
             .await
             .unwrap();
-        let accepted: Vec<bool> = r.iter().map(|o| o.accepted).collect();
-        assert_eq!(accepted, [true, false, false]);
+        assert_eq!(accepted(&r), [true, false, false]);
         assert!(
             r[1].error
                 .as_deref()
@@ -641,30 +627,22 @@ mod tests {
         assert!(r[2].error.as_deref().unwrap().contains("does not control"));
 
         let before = t.culture().await;
-        t.game.end_turn(t.tok("crown"), Tick(0)).await.unwrap();
+        t.end_turn("crown").await.unwrap();
+        let after = t.culture().await;
         assert!(
-            (t.culture().await - (before + 0.02)).abs() < 1e-9,
+            (after - (before + 0.02)).abs() < 1e-9,
             "the works resolve at close"
         );
     }
 
     #[tokio::test]
     async fn queued_orders_count_toward_the_per_character_limit() {
-        let t = T::tiny().await;
-        let tok = t.tok("crown");
-        t.game
-            .act(tok, Tick(0), vec![action("queen", "issue_edict", None)])
+        let t = T::with(&[]).await;
+        t.act("crown", 0, vec![edict()]).await.unwrap();
+        t.act("crown", 0, vec![action("queen", "relief", Some("north"))])
             .await
             .unwrap();
-        t.game
-            .act(tok, Tick(0), vec![action("queen", "relief", Some("north"))])
-            .await
-            .unwrap();
-        let third = t
-            .game
-            .act(tok, Tick(0), vec![action("queen", "issue_edict", None)])
-            .await
-            .unwrap();
+        let third = t.act("crown", 0, vec![edict()]).await.unwrap();
         assert!(!third[0].accepted);
         assert!(
             third[0]
@@ -677,67 +655,32 @@ mod tests {
 
     #[tokio::test]
     async fn decisions_made_on_an_old_tick_are_refused() {
-        let t = T::tiny().await;
+        let t = T::with(&[]).await;
         t.game.force_close().await.unwrap();
-        let stale = t
-            .game
-            .act(
-                t.tok("crown"),
-                Tick(0),
-                vec![action("queen", "issue_edict", None)],
-            )
-            .await;
+        let stale = t.act("crown", 0, vec![edict()]).await;
         assert!(matches!(
             stale,
             Err(GameError::StaleTick { current: Tick(1) })
         ));
-        assert!(matches!(
-            t.game.end_turn(t.tok("crown"), Tick(0)).await,
-            Err(GameError::StaleTick { .. })
-        ));
-        assert_eq!(
-            t.game.look(t.tok("crown")).await.unwrap().status,
-            TurnStatus::YourTurn
-        );
-        let fresh = t
-            .game
-            .act(
-                t.tok("crown"),
-                Tick(1),
-                vec![action("queen", "issue_edict", None)],
-            )
-            .await;
-        assert!(fresh.unwrap()[0].accepted);
+        let ended = t.end_turn("crown").await;
+        assert!(matches!(ended, Err(GameError::StaleTick { .. })));
+        assert_eq!(t.status("crown").await, TurnStatus::YourTurn);
+        assert!(t.act("crown", 1, vec![edict()]).await.unwrap()[0].accepted);
     }
 
     #[tokio::test]
     async fn a_seat_cannot_act_after_ending_its_turn() {
-        let t = T::tiny().await;
-        t.game.join(t.tok("crown")).await.unwrap();
-        t.game.join(t.tok("rival")).await.unwrap();
-        t.game.end_turn(t.tok("crown"), Tick(0)).await.unwrap();
-        assert!(matches!(
-            t.game
-                .act(
-                    t.tok("crown"),
-                    Tick(0),
-                    vec![action("queen", "issue_edict", None)]
-                )
-                .await,
-            Err(GameError::TurnEnded)
-        ));
-        assert_eq!(
-            t.game.look(t.tok("crown")).await.unwrap().status,
-            TurnStatus::Waiting
-        );
+        let t = T::with(&["crown", "rival"]).await;
+        t.end_turn("crown").await.unwrap();
+        let acted = t.act("crown", 0, vec![edict()]).await;
+        assert!(matches!(acted, Err(GameError::TurnEnded)));
+        assert_eq!(t.status("crown").await, TurnStatus::Waiting);
     }
 
     #[tokio::test]
     async fn wait_for_turn_times_out_while_others_decide_and_wakes_when_the_tick_closes() {
-        let t = T::tiny().await;
-        t.game.join(t.tok("crown")).await.unwrap();
-        t.game.join(t.tok("rival")).await.unwrap();
-        t.game.end_turn(t.tok("crown"), Tick(0)).await.unwrap();
+        let t = T::with(&["crown", "rival"]).await;
+        t.end_turn("crown").await.unwrap();
 
         let waited = t
             .game
@@ -752,7 +695,7 @@ mod tests {
         let waiter =
             tokio::spawn(async move { game.wait_for_turn(&crown, Duration::from_secs(10)).await });
         tokio::time::sleep(Duration::from_millis(20)).await;
-        t.game.end_turn(t.tok("rival"), Tick(0)).await.unwrap();
+        t.end_turn("rival").await.unwrap();
         let woke = tokio::time::timeout(Duration::from_secs(2), waiter)
             .await
             .unwrap()
@@ -784,62 +727,40 @@ mod tests {
         .await;
         assert!(auto.game.close_if_due().await.unwrap());
 
-        let slow = T::tiny().await;
-        slow.game.join(slow.tok("folk")).await.unwrap();
+        let slow = T::with(&["folk"]).await;
         assert!(!slow.game.close_if_due().await.unwrap());
     }
 
     #[tokio::test]
     async fn the_game_master_rules_on_freeform_actions_through_the_service() {
-        let t = T::tiny().await;
-        t.game
-            .act(
-                t.tok("crown"),
-                Tick(0),
-                vec![
-                    Order::Freeform {
-                        character: "queen".into(),
-                        text: "I marry the duke".into(),
-                    },
-                    action("queen", "relief", Some("south")),
-                ],
-            )
-            .await
-            .unwrap();
+        let t = T::with(&[]).await;
+        let wedding = Order::Freeform {
+            character: "queen".into(),
+            text: "I marry the duke".into(),
+        };
+        t.act(
+            "crown",
+            0,
+            vec![wedding, action("queen", "relief", Some("south"))],
+        )
+        .await
+        .unwrap();
         t.game.force_close().await.unwrap();
 
         let gm = t.game.look(t.tok("gm")).await.unwrap().perception.unwrap();
-        let pending = &gm.pending_rulings[0];
         let ruling = Ruling {
-            pending_id: pending.id.clone(),
+            pending_id: gm.pending_rulings[0].id.clone(),
             outcome: "A grand wedding".into(),
             public: true,
-            effects: vec![Effect {
-                target: Target::Metric {
-                    empire: "kingdom".into(),
-                    metric: "culture".into(),
-                },
-                delta: 0.2,
-                scaled_by: None,
-            }],
+            effects: vec![kingdom("culture", 0.2)],
         };
-        let first = t
-            .game
-            .rule(t.tok("gm"), Tick(1), vec![ruling.clone()])
-            .await
-            .unwrap();
-        assert!(first[0].accepted);
-        let dup = t
-            .game
-            .rule(t.tok("gm"), Tick(1), vec![ruling.clone()])
-            .await
-            .unwrap();
-        assert!(!dup[0].accepted, "one ruling per pending action");
-        let not_gm = t
-            .game
-            .rule(t.tok("crown"), Tick(1), vec![ruling])
-            .await
-            .unwrap();
+        let rule = |seat| t.game.rule(t.tok(seat), Tick(1), vec![ruling.clone()]);
+        assert!(rule("gm").await.unwrap()[0].accepted);
+        assert!(
+            !rule("gm").await.unwrap()[0].accepted,
+            "one ruling per pending action"
+        );
+        let not_gm = rule("crown").await.unwrap();
         assert!(not_gm[0].error.as_deref().unwrap().contains("game-master"));
 
         let before = t.culture().await;
@@ -849,49 +770,32 @@ mod tests {
 
     #[tokio::test]
     async fn private_information_stays_with_its_seat() {
-        let t = T::tiny().await;
+        let t = T::with(&[]).await;
+        let crown = t.tok("crown");
         t.game
-            .note(t.tok("crown"), &"queen".into(), "Poison the duke")
+            .note(crown, &"queen".into(), "Poison the duke")
             .await
             .unwrap();
         t.game
-            .message(
-                t.tok("crown"),
-                &"queen".into(),
-                &"northfolk".into(),
-                "Rise up",
-            )
+            .message(crown, &"queen".into(), &"northfolk".into(), "Rise up")
             .await
             .unwrap();
-        let rival = serde_json::to_string(&t.game.look(t.tok("rival")).await.unwrap()).unwrap();
+        let seen =
+            async |seat| serde_json::to_string(&t.game.look(t.tok(seat)).await.unwrap()).unwrap();
+        let rival = seen("rival").await;
         assert!(!rival.contains("Poison"));
         assert!(!rival.contains("Rise up"));
-        let folk = serde_json::to_string(&t.game.look(t.tok("folk")).await.unwrap()).unwrap();
+        let folk = seen("folk").await;
         assert!(folk.contains("Rise up"));
         assert!(!folk.contains("Poison"));
     }
 
     #[tokio::test]
     async fn every_change_is_persisted_and_broadcast_in_log_order() {
-        let t = T::tiny().await;
+        let t = T::with(&[]).await;
         let mut rx = t.game.subscribe();
-        let seq = t
-            .game
-            .intervene(
-                "A comet",
-                "",
-                vec![Effect {
-                    target: Target::Metric {
-                        empire: "kingdom".into(),
-                        metric: "stability".into(),
-                    },
-                    delta: -0.1,
-                    scaled_by: None,
-                }],
-                None,
-            )
-            .await
-            .unwrap();
+        let comet = vec![kingdom("stability", -0.1)];
+        let seq = t.game.intervene("A comet", "", comet, None).await.unwrap();
         let (got_seq, e) = rx.recv().await.unwrap();
         assert_eq!(got_seq, seq);
         assert!(matches!(e.kind, EventKind::Intervention { .. }));
@@ -903,73 +807,38 @@ mod tests {
     async fn a_reopened_world_resumes_where_it_stopped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("w.db");
-        let cfg = Config {
-            tick_deadline: Duration::from_secs(60),
-            autoplay: false,
+        let open = async |yaml, seed| {
+            let store = Store::open(&path).await.unwrap();
+            Game::open(store, yaml, seed, SLOW).await.unwrap()
         };
         let (tokens, before) = {
-            let c = Game::open(
-                Store::open(&path).await.unwrap(),
-                Some(TINY),
-                7,
-                cfg.clone(),
-            )
-            .await
-            .unwrap();
+            let c = open(Some(TINY), 7).await;
             let crown = &c.seat_tokens[&SeatId::from("crown")];
-            c.game
-                .act(crown, Tick(0), vec![action("queen", "issue_edict", None)])
-                .await
-                .unwrap();
+            c.game.act(crown, Tick(0), vec![edict()]).await.unwrap();
             c.game.force_close().await.unwrap();
             (c.seat_tokens, c.game.overview().await.state)
         };
-        let c = Game::open(Store::open(&path).await.unwrap(), None, 0, cfg)
-            .await
-            .unwrap();
+        let c = open(None, 0).await;
         assert_eq!(c.seat_tokens, tokens);
         assert_eq!(c.game.overview().await.state, before);
     }
 
     #[tokio::test]
     async fn a_failed_close_keeps_orders_and_lets_the_seat_retry() {
-        let t = T::tiny().await;
-        t.game.join(t.tok("crown")).await.unwrap();
-        t.game.join(t.tok("rival")).await.unwrap();
-        t.game
-            .act(
-                t.tok("crown"),
-                Tick(0),
-                vec![action("queen", "issue_edict", None)],
-            )
-            .await
-            .unwrap();
-        t.game.end_turn(t.tok("rival"), Tick(0)).await.unwrap();
+        let t = T::with(&["crown", "rival"]).await;
+        t.act("crown", 0, vec![edict()]).await.unwrap();
+        t.end_turn("rival").await.unwrap();
         t.game.store().close().await;
 
         assert!(matches!(
-            t.game.end_turn(t.tok("crown"), Tick(0)).await,
+            t.end_turn("crown").await,
             Err(GameError::Store(_))
         ));
         assert_eq!(t.tick().await, Tick(0));
+        assert_eq!(t.status("crown").await, TurnStatus::YourTurn);
+        let more = t.act("crown", 0, vec![edict(), edict()]).await.unwrap();
         assert_eq!(
-            t.game.look(t.tok("crown")).await.unwrap().status,
-            TurnStatus::YourTurn
-        );
-        let more = t
-            .game
-            .act(
-                t.tok("crown"),
-                Tick(0),
-                vec![
-                    action("queen", "issue_edict", None),
-                    action("queen", "issue_edict", None),
-                ],
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            more.iter().map(|r| r.accepted).collect::<Vec<_>>(),
+            accepted(&more),
             [true, false],
             "the first decree is still queued"
         );

@@ -2,19 +2,16 @@
 
 #![cfg(unix)]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use sim_core::{SeatId, Tick};
 use sim_runner::{Plan, RunnerConfig};
-use sim_server::game::{Config, Game};
-use sim_server::http::{HttpConfig, router};
-use sim_server::store::Store;
+use sim_server::game::Game;
 
-const TINY: &str = include_str!("../../sim-core/tests/fixtures/tiny.yaml");
+mod common;
 
 /// Seats of both empires in the tiny world, all played by one provider.
 const SEATS: [&str; 4] = ["crown", "rival", "folk", "pirates"];
@@ -75,24 +72,8 @@ async fn start(body: &str, extra: &str) -> Setup {
 async fn start_with_deadline(body: &str, extra: &str, deadline: Duration) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let claude = fake_claude(dir.path(), body);
-    let store = Store::in_memory().await.unwrap();
-    let config = Config {
-        tick_deadline: deadline,
-        autoplay: false,
-    };
-    let created = Game::open(store, Some(TINY), 7, config).await.unwrap();
+    let (created, addr) = common::serve(deadline).await;
     tokio::spawn(created.game.clone().run_scheduler());
-    let app = router(
-        created.game.clone(),
-        HttpConfig {
-            admin_token: created.admin_token.clone(),
-            allowed_hosts: vec![],
-            max_wait: Duration::from_millis(200),
-        },
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await });
 
     let seats: String = SEATS
         .iter()
@@ -156,9 +137,7 @@ async fn one_provider_plays_seats_of_rival_empires_and_time_moves_on() {
         assert!(!after("--allowedTools").contains("wait_for_turn"));
         assert_eq!(after("--model"), "haiku");
         assert!(a.contains(&"--strict-mcp-config"));
-    }
-    // Tokens never appear on a command line, where other processes could read them.
-    for args in read(&s.calls(), "args") {
+        // Tokens never appear on a command line, where other processes could read them.
         assert!(!s.tokens.values().any(|t| args.contains(t.as_str())));
     }
     // Every run starts in its own empty directory.
