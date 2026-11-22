@@ -299,8 +299,18 @@ impl Ruleset {
         }
         for m in &self.resources {
             let ctx = format!("resource `{}`", m.id);
-            offices(ctx.clone(), &m.visible_to)?;
+            if !m.visible_to.is_empty() {
+                return Err(invalid(format!(
+                    "{ctx}: resources are seen by their holder only; visible_to does not apply"
+                )));
+            }
             check_range(&ctx, m)?;
+        }
+        let l = &self.limits;
+        if !(l.ruling_max_delta.is_finite() && l.ruling_max_delta >= 0.0) {
+            return Err(invalid(
+                "limits.ruling_max_delta must be finite and not negative",
+            ));
         }
 
         for office in &self.offices {
@@ -327,9 +337,14 @@ impl Ruleset {
         }
         for a in &self.actions {
             let ctx = format!("action `{}`", a.id);
-            for r in a.cost.keys() {
+            for (r, v) in &a.cost {
                 if self.resource(r).is_none() {
                     return Err(unknown(&ctx, "resource", r.as_str()));
+                }
+                if !(v.is_finite() && *v >= 0.0) {
+                    return Err(invalid(format!(
+                        "{ctx}: a cost must be finite and not negative"
+                    )));
                 }
             }
             for e in &a.effects {
@@ -379,6 +394,9 @@ impl Ruleset {
         e: &EffectDef,
         has_target_character: bool,
     ) -> Result<(), DefinitionError> {
+        if !e.delta.is_finite() {
+            return Err(invalid(format!("{ctx}: effect deltas must be finite")));
+        }
         match &e.target {
             EffectTarget::Metric(m) if self.metric(m).is_none() => {
                 Err(unknown(ctx, "metric", m.as_str()))
@@ -421,7 +439,19 @@ impl Ruleset {
     }
 }
 
+/// Every number a ruleset can put into the log must be finite, so the log stays valid JSON.
 fn check_range<Id>(ctx: &str, d: &StatDef<Id>) -> Result<(), DefinitionError> {
+    let finite = |v: Option<f64>| v.is_none_or(f64::is_finite);
+    if !(d.initial.is_finite() && finite(d.min) && finite(d.max)) {
+        return Err(invalid(format!(
+            "{ctx}: initial, min and max must be finite"
+        )));
+    }
+    if let (Some(lo), Some(hi)) = (d.min, d.max)
+        && lo > hi
+    {
+        return Err(invalid(format!("{ctx}: min must not exceed max")));
+    }
     if let Some([lo, hi]) = d.start_range
         && !(lo.is_finite() && hi.is_finite() && lo <= hi)
     {
@@ -533,6 +563,27 @@ mod tests {
                 with(|r| r.metrics[0].start_range = Some(bad)),
                 Err(DefinitionError::Invalid(_))
             ));
+        }
+    }
+
+    #[test]
+    fn every_number_that_can_reach_the_log_must_be_finite() {
+        let bad: [fn(&mut Ruleset); 7] = [
+            |r| r.metrics[0].initial = f64::NAN,
+            |r| r.metrics[1].min = Some(f64::NEG_INFINITY),
+            |r| r.metrics[1].min = Some(2.0),
+            |r| r.actions[0].effects[0].delta = f64::INFINITY,
+            |r| {
+                r.actions[1].cost.insert("influence".into(), -1.0);
+            },
+            |r| r.limits.ruling_max_delta = f64::NAN,
+            |r| r.resources[0].visible_to.push("cohort".into()),
+        ];
+        for (i, edit) in bad.into_iter().enumerate() {
+            assert!(
+                matches!(with(edit), Err(DefinitionError::Invalid(_))),
+                "case {i}"
+            );
         }
     }
 

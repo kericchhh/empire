@@ -201,15 +201,20 @@ fn system(tick: Tick, kind: EventKind) -> Event {
     }
 }
 
+/// Announced inside the seat's own empire only: a foreign seat's name would reveal who plays
+/// there. The game master's arrival is known to the game master alone.
 pub fn join(w: &World, state: &State, seat: &SeatId) -> Result<Option<Event>, Rejection> {
-    seat_ref(w, seat)?;
+    let sref = seat_ref(w, seat)?;
     if state.joined.contains(seat) {
         return Ok(None);
     }
     Ok(Some(Event {
         tick: state.tick,
         cause: Cause::Seat(seat.clone()),
-        visibility: Visibility::Public,
+        visibility: match sref.empire {
+            Some(e) => Visibility::Empire(e.clone()),
+            None => Visibility::Seats(vec![seat.clone()]),
+        },
         kind: EventKind::SeatJoined { seat: seat.clone() },
     }))
 }
@@ -531,7 +536,12 @@ fn resolve_action<'a>(
         }
         (TargetKind::Character, Some(t)) => {
             target_char_id = CharacterId::from(t);
-            if &target_char_id == character || !knows(w, state, Some(&cs.empire), &target_char_id) {
+            // Characters of one seat share a player, so acting on each other would only move
+            // resources between pockets of the same agent.
+            let same_seat = w
+                .seat_of(character)
+                .is_some_and(|s| s.controls.contains(&target_char_id));
+            if same_seat || !knows(w, state, Some(&cs.empire), &target_char_id) {
                 return Err(Rejection::BadTarget(t.to_owned()));
             }
             target_character = Some(&target_char_id);
@@ -1338,6 +1348,39 @@ mod tests {
             s.push(e);
         }
         assert_eq!(s.state.characters[&"queen".into()].notes, ["two", "three"]);
+    }
+
+    #[test]
+    fn a_seat_joining_is_announced_in_its_own_empire_only() {
+        let mut s = Sim::tiny();
+        for seat in ["pirates", "gm"] {
+            let e = join(&s.w, &s.state, &seat.into()).unwrap().unwrap();
+            s.push(e);
+        }
+        assert!(sees(&s, "pirates", "The Pirates has taken their seat"));
+        assert!(!sees(&s, "crown", "The Pirates"));
+        assert!(!sees(&s, "pirates", "Game Master"));
+    }
+
+    #[test]
+    fn characters_of_one_seat_cannot_target_each_other() {
+        let mut s = Sim::tiny();
+        s.w.scenario.empires[0].seats[0]
+            .controls
+            .push("duke".into());
+        assert_eq!(
+            check_order(
+                &s.w,
+                &s.state,
+                &"crown".into(),
+                &Order::Action {
+                    character: "queen".into(),
+                    action: "spy".into(),
+                    target: Some("duke".into()),
+                },
+            ),
+            Err(Rejection::BadTarget("duke".into()))
+        );
     }
 
     #[test]
