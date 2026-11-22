@@ -5,10 +5,12 @@
 //! number of seats, in one empire or in rival ones, because every run is isolated and knows
 //! only its own seat's token.
 
+pub mod author;
 pub mod claude;
 pub mod config;
 mod fs;
 pub mod runner;
 
+pub use author::{AuthorError, AuthorJob, Authored, author};
 pub use config::{AgentConfig, ClaudeConfig, ConfigError, RunnerConfig};
 pub use runner::{Plan, PlanError, run};

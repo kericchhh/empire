@@ -116,37 +116,14 @@ fn tools(names: &[&str]) -> String {
 
 pub fn args(cfg: &ClaudeConfig, mcp_url: &str) -> Vec<OsString> {
     let mcp = serde_json::json!({ "mcpServers": { SERVER: { "type": "http", "url": mcp_url } } });
-    let mut a: Vec<OsString> = [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--tools",
-        "",
-        "--strict-mcp-config",
-        "--permission-mode",
-        "dontAsk",
-        "--restricted",
-        "--disable-slash-commands",
-        "--no-session-persistence",
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect();
+    let mut a = sealed_args(cfg, "stream-json");
+    a.push("--verbose".into());
     a.push("--allowedTools".into());
     a.push(tools(&TURN_TOOLS).into());
     a.push("--disallowedTools".into());
     a.push(tools(&RUNNER_TOOLS).into());
     a.push("--mcp-config".into());
     a.push(mcp.to_string().into());
-    if let Some(m) = &cfg.model {
-        a.push("--model".into());
-        a.push(m.into());
-    }
-    if let Some(e) = &cfg.effort {
-        a.push("--effort".into());
-        a.push(e.into());
-    }
     a
 }
 
@@ -193,6 +170,61 @@ pub async fn play(
     timeout: Duration,
     stop: impl Future<Output = ()>,
 ) -> Result<RunReport, RunError> {
+    let outcome = launch(
+        cfg,
+        args(cfg, turn.mcp_url),
+        &prompt(turn),
+        log,
+        work,
+        timeout,
+        stop,
+    )
+    .await?;
+    let summary = summary(&tokio::fs::read_to_string(log).await.unwrap_or_default());
+    Ok(RunReport { outcome, summary })
+}
+
+/// The arguments every run shares, whatever it is for: no built-in tools, no MCP servers
+/// beyond those a caller adds, no settings files and no saved session.
+pub(crate) fn sealed_args(cfg: &ClaudeConfig, output_format: &str) -> Vec<OsString> {
+    let mut a: Vec<OsString> = [
+        "-p",
+        "--output-format",
+        output_format,
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "dontAsk",
+        "--restricted",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    if let Some(m) = &cfg.model {
+        a.push("--model".into());
+        a.push(m.into());
+    }
+    if let Some(e) = &cfg.effort {
+        a.push("--effort".into());
+        a.push(e.into());
+    }
+    a
+}
+
+/// Launch the CLI in a fresh directory under `work` with a cleared environment, `input` on
+/// stdin, stdout to `log` and stderr next to it. Killed at `timeout` or when `stop` completes.
+pub(crate) async fn launch(
+    cfg: &ClaudeConfig,
+    args: Vec<OsString>,
+    input: &str,
+    log: &Path,
+    work: &Path,
+    timeout: Duration,
+    stop: impl Future<Output = ()>,
+) -> Result<Outcome, RunError> {
     private_dir(work)?;
     let workdir = tempfile::Builder::new().prefix("run-").tempdir_in(work)?;
     if let Some(dir) = log.parent() {
@@ -201,7 +233,7 @@ pub async fn play(
     let stdout = private_file(log)?;
     let stderr = private_file(&log.with_extension("stderr.log"))?;
     let mut cmd = Command::new(&cfg.command);
-    cmd.args(args(cfg, turn.mcp_url))
+    cmd.args(args)
         .current_dir(workdir.path())
         .env_clear()
         .stdin(Stdio::piped())
@@ -226,9 +258,8 @@ pub async fn play(
         .stdin
         .take()
         .expect("stdin was configured as piped above");
-    let prompt = prompt(turn);
     let run = async {
-        stdin.write_all(prompt.as_bytes()).await?;
+        stdin.write_all(input.as_bytes()).await?;
         drop(stdin);
         child.wait().await
     };
@@ -239,18 +270,16 @@ pub async fn play(
         },
         () = stop => None,
     };
-    let outcome = match outcome {
+    Ok(match outcome {
         Some(o @ Outcome::Exited(_)) => o,
         other => {
             child.kill().await?;
             other.unwrap_or(Outcome::Stopped)
         }
-    };
-    let summary = summary(&tokio::fs::read_to_string(log).await.unwrap_or_default());
-    Ok(RunReport { outcome, summary })
+    })
 }
 
-fn summary(stream: &str) -> Option<Summary> {
+pub(crate) fn summary(stream: &str) -> Option<Summary> {
     #[derive(Deserialize)]
     struct Line {
         #[serde(rename = "type")]

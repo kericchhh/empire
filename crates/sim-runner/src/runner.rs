@@ -47,11 +47,16 @@ pub enum PlanError {
     BadSeatId(SeatId),
 }
 
+/// Whether a seat id can name its log directory. The runner plays only such seats.
+pub fn seat_id_ok(seat: &SeatId) -> bool {
+    let id = seat.as_str();
+    !(id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\']))
+}
+
 impl Plan {
     pub fn validate(&self) -> Result<(), PlanError> {
         for s in self.config.seats.keys() {
-            let id = s.as_str();
-            if id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\']) {
+            if !seat_id_ok(s) {
                 return Err(PlanError::BadSeatId(s.clone()));
             }
             if !self.tokens.contains_key(s) {

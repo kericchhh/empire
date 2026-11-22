@@ -17,7 +17,23 @@ pub struct RunnerConfig {
     /// A run still going after this long is stopped and the seat's turn is ended for it.
     #[serde(default = "default_timeout")]
     pub turn_timeout_seconds: u64,
+    /// The agent for every seat not listed in `seats`, except the game master's. Lets one
+    /// file, or the `--play-all` flag, fit any scenario.
+    #[serde(default)]
+    pub all: Option<AgentConfig>,
+    #[serde(default)]
     pub seats: BTreeMap<SeatId, AgentConfig>,
+}
+
+impl Default for RunnerConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: default_concurrency(),
+            turn_timeout_seconds: default_timeout(),
+            all: None,
+            seats: BTreeMap::new(),
+        }
+    }
 }
 
 fn default_concurrency() -> usize {
@@ -33,6 +49,28 @@ fn default_timeout() -> u64 {
 pub enum AgentConfig {
     /// Claude Code, run headless with `claude -p` on the user's own login.
     Claude(ClaudeConfig),
+}
+
+impl std::str::FromStr for AgentConfig {
+    type Err = ConfigError;
+
+    /// `claude` or `claude:<model>`, as the command line takes it.
+    fn from_str(s: &str) -> Result<Self, ConfigError> {
+        let (kind, model) = match s.split_once(':') {
+            Some((k, m)) => (k, Some(m.to_owned())),
+            None => (s, None),
+        };
+        match kind {
+            "claude" => Ok(Self::Claude(ClaudeConfig {
+                model: model.filter(|m| !m.is_empty()),
+                effort: None,
+                command: default_claude(),
+            })),
+            other => Err(ConfigError::Invalid(format!(
+                "unknown agent `{other}`: expected `claude` or `claude:<model>`"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -77,12 +115,22 @@ impl RunnerConfig {
                 "turn_timeout_seconds must be at least 1".into(),
             ));
         }
-        if c.seats.is_empty() {
+        if c.seats.is_empty() && c.all.is_none() {
             return Err(ConfigError::Invalid(
-                "no seats are assigned an agent".into(),
+                "no seats are assigned an agent: list `seats` or set `all`".into(),
             ));
         }
         Ok(c)
+    }
+
+    /// Give `all`'s agent to every seat in `seats` that has none yet. Run once the world's
+    /// seats are known; the game master is never in `seats`.
+    pub fn resolve<'a>(&mut self, seats: impl IntoIterator<Item = &'a SeatId>) {
+        if let Some(all) = self.all.take() {
+            for s in seats {
+                self.seats.entry(s.clone()).or_insert_with(|| all.clone());
+            }
+        }
     }
 
     pub fn turn_timeout(&self) -> Duration {
@@ -106,6 +154,38 @@ mod tests {
         assert_eq!(rome.model.as_deref(), Some("sonnet"));
         let AgentConfig::Claude(parthia) = &c.seats[&SeatId::from("parthia")];
         assert_eq!(parthia.command, PathBuf::from("claude"));
+    }
+
+    #[test]
+    fn one_agent_can_play_every_seat_of_any_scenario() {
+        let mut c = RunnerConfig::from_yaml(
+            "all: { claude: { model: haiku } }\nseats:\n  a: { claude: { model: opus } }\n",
+        )
+        .unwrap();
+        let ids: Vec<SeatId> = ["a", "b", "c"].map(SeatId::from).into();
+        c.resolve(&ids);
+        assert_eq!(c.seats.len(), 3);
+        let model = |s: &str| {
+            let AgentConfig::Claude(a) = &c.seats[&SeatId::from(s)];
+            a.model.clone()
+        };
+        assert_eq!(model("a").as_deref(), Some("opus"));
+        assert_eq!(model("c").as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn an_agents_file_may_set_only_all() {
+        let c = RunnerConfig::from_yaml("all: { claude: {} }\n").unwrap();
+        assert!(c.seats.is_empty() && c.all.is_some());
+    }
+
+    #[test]
+    fn the_command_line_names_an_agent_and_a_model() {
+        let AgentConfig::Claude(c) = "claude:sonnet".parse().unwrap();
+        assert_eq!(c.model.as_deref(), Some("sonnet"));
+        let AgentConfig::Claude(c) = "claude".parse().unwrap();
+        assert_eq!(c.model, None);
+        assert!("gpt:4".parse::<AgentConfig>().is_err());
     }
 
     #[test]
