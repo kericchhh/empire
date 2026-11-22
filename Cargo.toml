@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sim-core", "crates/sim-server"]
+members = ["crates/sim-core", "crates/sim-runner", "crates/sim-server"]
 
 [workspace.package]
 edition = "2024"
@@ -9,9 +9,14 @@ publish = false
 
 [workspace.dependencies]
 sim-core = { path = "crates/sim-core" }
+sim-runner = { path = "crates/sim-runner" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 schemars = "1.2.3"
 thiserror = "2.0.21"
 tracing = "0.1.44"
 rand = "0.10.4"
+rmcp = "3.11.0"
+serde_yaml_ng = "0.10.0"
+tempfile = "3.27.0"
+tokio = "1.54.1"

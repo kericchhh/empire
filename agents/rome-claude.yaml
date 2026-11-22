@@ -1,0 +1,17 @@
+# Every Roman and Parthian seat played by Claude Code on your own login.
+# Seats left out (here, the game master) wait for an external agent or fall back to the
+# rules engine. Run with:
+#   sim-server run --db rome.db --scenario scenarios/rome.yaml --agents agents/rome-claude.yaml \
+#     --tick-seconds 700
+# Runs queue for the slots: 7 seats, 2 at a time, 150 s each can take 600 s, so the tick
+# deadline must be longer than that or the last seats miss their turn.
+max_concurrent: 2          # agent runs at once, across all seats
+turn_timeout_seconds: 150
+seats:
+  princeps:  { claude: { model: sonnet } }
+  senate:    { claude: { model: haiku } }
+  legate:    { claude: { model: haiku } }
+  poet:      { claude: { model: haiku } }
+  parthia:   { claude: { model: sonnet } }
+  pretender: { claude: { model: haiku } }
+  villages:  { claude: { model: haiku } }
