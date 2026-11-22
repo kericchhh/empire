@@ -1,7 +1,5 @@
 //! The runner against a real world host, with a fake `claude` that records how it was run.
 
-#![cfg(unix)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
