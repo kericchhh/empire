@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use sim_core::{Scenario, World};
-use sim_runner::{Plan, RunnerConfig};
+use sim_runner::{AgentConfig, AuthorJob, Plan, RunnerConfig};
 use sim_server::game::{Config, Game};
 use sim_server::http::{HttpConfig, router};
 use sim_server::mcp::MAX_WAIT;
@@ -19,13 +19,25 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "parsed once at startup; boxing would only obscure the clap definitions"
+)]
 enum Command {
-    /// Run a world. Creates it from --scenario if the database is new, otherwise resumes it.
+    /// Run a world. Creates it from --scenario or --prompt if the database is new, otherwise
+    /// resumes it.
     Run {
         #[arg(long)]
         db: PathBuf,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "prompt")]
         scenario: Option<PathBuf>,
+        /// Describe the world in your own words; your agent writes the scenario, saved as
+        /// `<db>.scenario.yaml`. Only for a new database.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// The agent that writes the scenario for --prompt: `claude` or `claude:<model>`.
+        #[arg(long, default_value = "claude", requires = "prompt")]
+        author: AgentConfig,
         #[arg(long, default_value_t = 0)]
         seed: u64,
         #[arg(long, default_value = "127.0.0.1:7878")]
@@ -43,9 +55,28 @@ enum Command {
         /// wait for an external agent or fall back to the rules engine.
         #[arg(long)]
         agents: Option<PathBuf>,
+        /// Let one agent play every seat but the game master's: `claude` or
+        /// `claude:<model>`. Seats listed in --agents keep their own agent.
+        #[arg(long)]
+        play_all: Option<AgentConfig>,
         /// Where agent run logs go. Default: next to the database, as `<db>.runs`.
         #[arg(long)]
         runs: Option<PathBuf>,
+    },
+    /// Have your agent write a scenario from a description, check it, and save it.
+    Create {
+        /// What the world should be, in your own words.
+        #[arg(long)]
+        prompt: String,
+        /// Where to save the scenario.
+        #[arg(long)]
+        out: PathBuf,
+        /// The agent that writes it: `claude` or `claude:<model>`.
+        #[arg(long, default_value = "claude")]
+        author: AgentConfig,
+        /// Drafts to try before giving up, each told why the last one was rejected.
+        #[arg(long, default_value_t = 3)]
+        attempts: u32,
     },
     /// Print the JSON Schema for scenario files.
     Schema,
@@ -58,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sim_server=info".into()),
+                .unwrap_or_else(|_| "warn,sim_server=info,sim_runner=info".into()),
         )
         .init();
 
@@ -81,18 +112,35 @@ async fn main() -> anyhow::Result<()> {
                 sc.seat_ids().count(),
             );
         }
+        Command::Create {
+            prompt,
+            out,
+            author,
+            attempts,
+        } => {
+            if out.exists() {
+                anyhow::bail!("{} already exists", out.display());
+            }
+            let yaml =
+                write_scenario(&prompt, &author, &out.with_extension("runs"), attempts).await?;
+            std::fs::write(&out, yaml).with_context(|| format!("writing {}", out.display()))?;
+            println!("Saved {}. Run it with --scenario {0}.", out.display());
+        }
         Command::Run {
             db,
             scenario,
+            prompt,
+            author,
             seed,
             bind,
             tick_seconds,
             autoplay,
             allowed_hosts,
             agents,
+            play_all,
             runs,
         } => {
-            let agents = agents
+            let mut agents = agents
                 .as_ref()
                 .map(|p| -> anyhow::Result<RunnerConfig> {
                     let src = std::fs::read_to_string(p)
@@ -100,12 +148,52 @@ async fn main() -> anyhow::Result<()> {
                     Ok(RunnerConfig::from_yaml(&src)?)
                 })
                 .transpose()?;
-            let yaml = scenario
-                .as_ref()
-                .map(|p| {
-                    std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))
-                })
+            if let Some(all) = play_all {
+                agents.get_or_insert_with(RunnerConfig::default).all = Some(all);
+            }
+            let runs = runs.unwrap_or_else(|| db.with_extension("runs"));
+            // Bind first, so a busy port fails before any agent is paid to write a world.
+            let listener = tokio::net::TcpListener::bind(bind)
+                .await
+                .with_context(|| format!("binding {bind}"))?;
+            let yaml = match (&scenario, &prompt) {
+                (Some(p), _) => Some(
+                    std::fs::read_to_string(p)
+                        .with_context(|| format!("reading {}", p.display()))?,
+                ),
+                (None, Some(request)) => {
+                    if db.exists() {
+                        anyhow::bail!(
+                            "{} already holds a world; drop --prompt to resume it",
+                            db.display()
+                        );
+                    }
+                    let saved = db.with_extension("scenario.yaml");
+                    if saved.exists() {
+                        anyhow::bail!(
+                            "{} already exists; start it with --scenario {0}, or move it",
+                            saved.display()
+                        );
+                    }
+                    let yaml = write_scenario(request, &author, &runs, 3).await?;
+                    std::fs::write(&saved, &yaml)
+                        .with_context(|| format!("writing {}", saved.display()))?;
+                    println!("Saved the scenario as {}.", saved.display());
+                    Some(yaml)
+                }
+                (None, None) => None,
+            };
+            // Check agent assignments against a new world before it is created, so a bad
+            // assignment never leaves a half-made world behind.
+            // A saved world wins over --scenario, so only a new database is checked here.
+            let fresh = yaml
+                .as_deref()
+                .filter(|_| !db.exists())
+                .map(|y| World::standard(Scenario::from_yaml(y)?))
                 .transpose()?;
+            if let (Some(c), Some(w)) = (agents.as_mut(), &fresh) {
+                assign(c, w)?;
+            }
             let store = Store::open(&db).await?;
             let created = Game::open(
                 store,
@@ -145,16 +233,9 @@ async fn main() -> anyhow::Result<()> {
                     max_wait: MAX_WAIT,
                 },
             );
-            let listener = tokio::net::TcpListener::bind(bind).await?;
-            if let Some(config) = agents {
-                if let Some(gm) = w.scenario.game_master.as_ref()
-                    && config.seats.contains_key(&gm.id)
-                {
-                    anyhow::bail!(
-                        "the runner cannot play the game master seat `{}` yet: it would rule \
-                         before the other seats have acted. Connect an agent to it yourself.",
-                        gm.id
-                    );
+            if let Some(mut config) = agents {
+                if fresh.is_none() {
+                    assign(&mut config, &w)?;
                 }
                 let addr = match listener.local_addr()? {
                     a if a.ip().is_unspecified() && a.is_ipv4() => {
@@ -173,7 +254,7 @@ async fn main() -> anyhow::Result<()> {
                         .collect(),
                     config,
                     mcp_url: format!("http://{addr}/mcp"),
-                    log_dir: runs.unwrap_or_else(|| db.with_extension("runs")),
+                    log_dir: runs,
                 };
                 plan.validate()?;
                 let worst = plan.worst_case_tick();
@@ -202,4 +283,52 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Give `all`'s agent to the world's empire seats, and refuse assignments the runner
+/// cannot play: unknown seats, and the game master's.
+fn assign(config: &mut RunnerConfig, w: &World) -> anyhow::Result<()> {
+    config.resolve(w.scenario.seats().map(|(_, s)| &s.id));
+    for id in config.seats.keys() {
+        match w.seat(id) {
+            None => anyhow::bail!("--agents names seat `{id}`, which this world does not have"),
+            Some(s) if s.game_master => anyhow::bail!(
+                "the runner cannot play the game master seat `{id}` yet: it would rule before \
+                 the other seats have acted. Connect an agent to it yourself."
+            ),
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Ask the author agent for a scenario and return it once the engine accepts it.
+async fn write_scenario(
+    request: &str,
+    author: &AgentConfig,
+    log_dir: &std::path::Path,
+    attempts: u32,
+) -> anyhow::Result<String> {
+    let AgentConfig::Claude(agent) = author;
+    println!("Writing a scenario with your agent (this takes a minute or two)...");
+    let a = sim_runner::author(&AuthorJob {
+        agent,
+        request,
+        log_dir,
+        attempts,
+        timeout: Duration::from_secs(600),
+    })
+    .await?;
+    let sc = &a.world.scenario;
+    println!(
+        "{}: {} empires, {} regions, {} characters, {} seats ({} attempt{}).",
+        sc.name,
+        sc.empires.len(),
+        sc.regions().count(),
+        sc.characters().count(),
+        sc.seat_ids().count(),
+        a.attempts,
+        if a.attempts == 1 { "" } else { "s" },
+    );
+    Ok(a.yaml)
 }
