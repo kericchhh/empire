@@ -130,12 +130,18 @@ pub fn args(cfg: &ClaudeConfig, mcp_url: &str) -> Vec<OsString> {
 /// The whole instruction for one turn. It names no setting: the agent learns who it is from
 /// the perception `look` returns.
 pub fn prompt(turn: &Turn) -> String {
-    let role = if turn.game_master {
-        "You are the game master: you see everything and rule on the free-form actions listed \
-         in `pending_rulings` with `rule`, fairly and within the limits."
+    let (role, gm) = if turn.game_master {
+        (
+            "You are the game master: you see everything and rule on the free-form actions \
+             listed in `pending_rulings` with `rule`, fairly and within the limits.",
+            " (as game master, `rule` instead)",
+        )
     } else {
-        "You play the characters of one seat in one empire. Pursue their goals using only what \
-         they know."
+        (
+            "You play the characters of one seat in one empire. Pursue their goals using only \
+             what they know.",
+            "",
+        )
     };
     format!(
         "You are taking one turn in Empire, a simulation where several empires share one world. \
@@ -152,11 +158,6 @@ pub fn prompt(turn: &Turn) -> String {
          to you.",
         token = turn.token,
         tick = turn.tick,
-        gm = if turn.game_master {
-            " (as game master, `rule` instead)"
-        } else {
-            ""
-        },
     )
 }
 
@@ -170,16 +171,8 @@ pub async fn play(
     timeout: Duration,
     stop: impl Future<Output = ()>,
 ) -> Result<RunReport, RunError> {
-    let outcome = launch(
-        cfg,
-        args(cfg, turn.mcp_url),
-        &prompt(turn),
-        log,
-        work,
-        timeout,
-        stop,
-    )
-    .await?;
+    let args = args(cfg, turn.mcp_url);
+    let outcome = launch(cfg, args, &prompt(turn), log, work, timeout, stop).await?;
     let summary = summary(&tokio::fs::read_to_string(log).await.unwrap_or_default());
     Ok(RunReport { outcome, summary })
 }
@@ -203,13 +196,10 @@ pub(crate) fn sealed_args(cfg: &ClaudeConfig, output_format: &str) -> Vec<OsStri
     .into_iter()
     .map(OsString::from)
     .collect();
-    if let Some(m) = &cfg.model {
-        a.push("--model".into());
-        a.push(m.into());
-    }
-    if let Some(e) = &cfg.effort {
-        a.push("--effort".into());
-        a.push(e.into());
+    for (flag, value) in [("--model", &cfg.model), ("--effort", &cfg.effort)] {
+        if let Some(v) = value {
+            a.extend([flag.into(), v.into()]);
+        }
     }
     a
 }
@@ -240,16 +230,10 @@ pub(crate) async fn launch(
         .stdout(stdout)
         .stderr(stderr)
         .kill_on_drop(true);
-    for k in KEEP_ENV {
-        if let Some(v) = std::env::var_os(k) {
-            cmd.env(k, v);
-        }
-    }
-    for (k, v) in std::env::vars_os() {
-        if k.to_string_lossy().starts_with("XDG_") {
-            cmd.env(k, v);
-        }
-    }
+    cmd.envs(std::env::vars_os().filter(|(k, _)| {
+        let k = k.to_string_lossy();
+        KEEP_ENV.contains(&&*k) || k.starts_with("XDG_")
+    }));
     let mut child = cmd.spawn().map_err(|source| RunError::Spawn {
         command: cfg.command.display().to_string(),
         source,
@@ -265,18 +249,13 @@ pub(crate) async fn launch(
     };
     let outcome = tokio::select! {
         r = tokio::time::timeout(timeout, run) => match r {
-            Ok(status) => Some(Outcome::Exited(status?.code())),
-            Err(_) => Some(Outcome::TimedOut),
+            Ok(status) => return Ok(Outcome::Exited(status?.code())),
+            Err(_) => Outcome::TimedOut,
         },
-        () = stop => None,
+        () = stop => Outcome::Stopped,
     };
-    Ok(match outcome {
-        Some(o @ Outcome::Exited(_)) => o,
-        other => {
-            child.kill().await?;
-            other.unwrap_or(Outcome::Stopped)
-        }
-    })
+    child.kill().await?;
+    Ok(outcome)
 }
 
 pub(crate) fn summary(stream: &str) -> Option<Summary> {

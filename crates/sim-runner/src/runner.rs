@@ -106,7 +106,7 @@ async fn play_seat(plan: Arc<Plan>, seat: SeatId, slots: Arc<Semaphore>) {
     let mut pause = RETRY_MIN;
     let mut played: Option<Tick> = None;
     loop {
-        let e = session(&plan, &seat, &slots, &mut played, &mut pause).await;
+        let Err(e) = session(&plan, &seat, &slots, &mut played, &mut pause).await;
         tracing::warn!(error = %e, "seat runner: reconnecting");
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(RETRY_MAX);
@@ -131,7 +131,6 @@ enum SessionError {
 struct View {
     status: Status,
     tick: Tick,
-    #[serde(default)]
     perception: Option<Seen>,
 }
 
@@ -147,21 +146,8 @@ struct Seen {
     game_master: bool,
 }
 
-/// One MCP connection: join, then take turns until something fails. Never returns `Ok`.
+/// One MCP connection: join, then take turns until something fails.
 async fn session(
-    plan: &Plan,
-    seat: &SeatId,
-    slots: &Semaphore,
-    played: &mut Option<Tick>,
-    pause: &mut Duration,
-) -> SessionError {
-    match turns(plan, seat, slots, played, pause).await {
-        Ok(never) => match never {},
-        Err(e) => e,
-    }
-}
-
-async fn turns(
     plan: &Plan,
     seat: &SeatId,
     slots: &Semaphore,
@@ -307,15 +293,11 @@ mod tests {
     }
 
     #[test]
-    fn every_agent_seat_needs_a_token() {
+    fn every_agent_seat_needs_a_token_and_a_safe_directory_name() {
         let mut p = plan("seats:\n  a: { claude: {} }\n");
         assert_eq!(p.validate(), Err(PlanError::NoToken("a".into())));
         p.tokens.insert("a".into(), "t".into());
         assert_eq!(p.validate(), Ok(()));
-    }
-
-    #[test]
-    fn seat_ids_must_be_safe_directory_names() {
         let mut p = plan("seats:\n  '..': { claude: {} }\n");
         p.tokens.insert("..".into(), "t".into());
         assert_eq!(p.validate(), Err(PlanError::BadSeatId("..".into())));
