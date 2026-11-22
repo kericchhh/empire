@@ -3,6 +3,7 @@
 //! setting; scenarios only describe the starting point.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -52,11 +53,6 @@ pub struct StatDef<Id> {
 }
 
 impl<Id> StatDef<Id> {
-    pub fn clamp(&self, v: f64) -> f64 {
-        let v = self.min.map_or(v, |m| v.max(m));
-        self.max.map_or(v, |m| v.min(m))
-    }
-
     pub fn visible_to_office(&self, office: &OfficeId) -> bool {
         self.visible_to.is_empty() || self.visible_to.contains(office)
     }
@@ -281,31 +277,9 @@ impl Ruleset {
         unique("action", self.actions.iter().map(|m| m.id.as_str()))?;
         unique("rule", self.rules.iter().map(|m| m.id.as_str()))?;
 
-        let offices = |ctx: String, list: &[OfficeId]| {
-            list.iter().try_for_each(|o| match self.office(o) {
-                Some(_) => Ok(()),
-                None => Err(unknown(&ctx, "office", o.as_str())),
-            })
-        };
-        for m in &self.metrics {
-            let ctx = format!("metric `{}`", m.id);
-            offices(ctx.clone(), &m.visible_to)?;
-            check_range(&ctx, m)?;
-        }
-        for m in &self.region_stats {
-            let ctx = format!("region stat `{}`", m.id);
-            offices(ctx.clone(), &m.visible_to)?;
-            check_range(&ctx, m)?;
-        }
-        for m in &self.resources {
-            let ctx = format!("resource `{}`", m.id);
-            if !m.visible_to.is_empty() {
-                return Err(invalid(format!(
-                    "{ctx}: resources are seen by their holder only; visible_to does not apply"
-                )));
-            }
-            check_range(&ctx, m)?;
-        }
+        self.check_stats("metric", &self.metrics, true)?;
+        self.check_stats("region stat", &self.region_stats, true)?;
+        self.check_stats("resource", &self.resources, false)?;
         let l = &self.limits;
         if !(l.ruling_max_delta.is_finite() && l.ruling_max_delta >= 0.0) {
             return Err(invalid(
@@ -315,10 +289,8 @@ impl Ruleset {
 
         for office in &self.offices {
             let ctx = format!("office `{}`", office.id);
-            for a in &office.actions {
-                if self.action(a).is_none() {
-                    return Err(unknown(&ctx, "action", a.as_str()));
-                }
+            if let Some(a) = office.actions.iter().find(|a| self.action(a).is_none()) {
+                return Err(unknown(&ctx, "action", a.as_str()));
             }
             if let Some(a) = &office.default_action {
                 if !office.actions.contains(a) {
@@ -384,6 +356,28 @@ impl Ruleset {
                     self.check_value(&ctx, v, r.scope)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// `visible_to` must name known offices, or be empty where it does not apply.
+    fn check_stats<Id: fmt::Display>(
+        &self,
+        kind: &str,
+        defs: &[StatDef<Id>],
+        has_visibility: bool,
+    ) -> Result<(), DefinitionError> {
+        for d in defs {
+            let ctx = format!("{kind} `{}`", d.id);
+            if !has_visibility && !d.visible_to.is_empty() {
+                return Err(invalid(format!(
+                    "{ctx}: resources are seen by their holder only; visible_to does not apply"
+                )));
+            }
+            if let Some(o) = d.visible_to.iter().find(|o| self.office(o).is_none()) {
+                return Err(unknown(&ctx, "office", o.as_str()));
+            }
+            check_range(&ctx, d)?;
         }
         Ok(())
     }
@@ -519,56 +513,22 @@ mod tests {
     }
 
     #[test]
-    fn default_actions_must_be_allowed_and_untargeted() {
-        let feast = ActionId::from("feast");
-        assert!(matches!(
-            with(|r| r.offices[0].default_action = Some("work".into())),
-            Err(DefinitionError::Invalid(_))
-        ));
-        assert!(matches!(
-            with(|r| r.offices[0].default_action = Some(feast.clone())),
-            Err(DefinitionError::Invalid(_))
-        ));
-    }
-
-    #[test]
-    fn effects_need_a_scope_that_provides_their_target() {
-        assert!(matches!(
-            with(|r| r.actions[0].effects[0].target =
-                EffectTarget::TargetResource("influence".into())),
-            Err(DefinitionError::Invalid(_))
-        ));
-        assert!(matches!(
-            with(|r| r.rules[0].scope = RuleScope::EachEmpire),
-            Err(DefinitionError::Invalid(_))
-        ));
-        assert!(matches!(
-            with(|r| r.rules[0].effects[0].target = EffectTarget::Resource("influence".into())),
-            Err(DefinitionError::Invalid(_))
-        ));
-        assert!(matches!(
-            with(|r| r.rules[0].chance = 1.5),
-            Err(DefinitionError::Invalid(_))
-        ));
-        assert!(matches!(
-            with(|r| r.rules[0].when.as_mut().unwrap().for_ticks = 0),
-            Err(DefinitionError::Invalid(_))
-        ));
-    }
-
-    #[test]
-    fn start_ranges_must_be_ordered_and_finite() {
-        for bad in [[1.0, 0.0], [0.0, f64::INFINITY], [f64::NAN, 1.0]] {
-            assert!(matches!(
-                with(|r| r.metrics[0].start_range = Some(bad)),
-                Err(DefinitionError::Invalid(_))
-            ));
-        }
-    }
-
-    #[test]
-    fn every_number_that_can_reach_the_log_must_be_finite() {
-        let bad: [fn(&mut Ruleset); 7] = [
+    fn inconsistent_or_non_finite_definitions_are_rejected() {
+        let bad: [fn(&mut Ruleset); 17] = [
+            // Default actions must be allowed and untargeted.
+            |r| r.offices[0].default_action = Some("work".into()),
+            |r| r.offices[0].default_action = Some("feast".into()),
+            // Effects need a scope that provides their target.
+            |r| r.actions[0].effects[0].target = EffectTarget::TargetResource("influence".into()),
+            |r| r.rules[0].scope = RuleScope::EachEmpire,
+            |r| r.rules[0].effects[0].target = EffectTarget::Resource("influence".into()),
+            |r| r.rules[0].chance = 1.5,
+            |r| r.rules[0].when.as_mut().unwrap().for_ticks = 0,
+            // Start ranges must be ordered and finite.
+            |r| r.metrics[0].start_range = Some([1.0, 0.0]),
+            |r| r.metrics[0].start_range = Some([0.0, f64::INFINITY]),
+            |r| r.metrics[0].start_range = Some([f64::NAN, 1.0]),
+            // Every number that can reach the log must be finite.
             |r| r.metrics[0].initial = f64::NAN,
             |r| r.metrics[1].min = Some(f64::NEG_INFINITY),
             |r| r.metrics[1].min = Some(2.0),
