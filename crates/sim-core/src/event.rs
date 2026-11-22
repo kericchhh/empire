@@ -55,6 +55,26 @@ pub enum Target {
     },
 }
 
+impl Target {
+    pub(crate) fn metric(empire: &EmpireId, metric: &MetricId) -> Self {
+        let (empire, metric) = (empire.clone(), metric.clone());
+        Self::Metric { empire, metric }
+    }
+
+    pub(crate) fn stat(region: &RegionId, stat: &StatId) -> Self {
+        let (region, stat) = (region.clone(), stat.clone());
+        Self::Stat { region, stat }
+    }
+
+    pub(crate) fn resource(character: &CharacterId, resource: &ResourceId) -> Self {
+        let (character, resource) = (character.clone(), resource.clone());
+        Self::Resource {
+            character,
+            resource,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Effect {
     pub target: Target,
