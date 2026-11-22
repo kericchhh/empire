@@ -10,6 +10,7 @@ use axum::{Json, Router};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sim_core::{Effect, EmpireId, Event};
 
 use crate::game::{Game, GameError, Overview};
@@ -31,8 +32,7 @@ pub struct HttpConfig {
 pub fn router(game: Game, cfg: HttpConfig) -> Router {
     let mut mcp_cfg = StreamableHttpServerConfig::default();
     mcp_cfg.allowed_hosts.extend(cfg.allowed_hosts);
-    let mcp_game = game.clone();
-    let max_wait = cfg.max_wait;
+    let (mcp_game, max_wait) = (game.clone(), cfg.max_wait);
     let mcp = StreamableHttpService::new(
         move || Ok(EmpireMcp::new(mcp_game.clone(), max_wait)),
         Arc::new(LocalSessionManager::default()),
@@ -72,31 +72,19 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-struct ApiError(GameError);
-
-impl From<GameError> for ApiError {
-    fn from(e: GameError) -> Self {
-        Self(e)
-    }
-}
-
-impl IntoResponse for ApiError {
+impl IntoResponse for GameError {
     fn into_response(self) -> Response {
-        let status = match &self.0 {
+        let status = match &self {
             GameError::Rejected(_) | GameError::TurnEnded | GameError::StaleTick { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
             GameError::UnknownToken => StatusCode::UNAUTHORIZED,
             GameError::Scenario(_) | GameError::Store(_) => {
-                tracing::error!(error = %self.0, "request failed");
+                tracing::error!(error = %self, "request failed");
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
-        (
-            status,
-            Json(serde_json::json!({ "error": self.0.to_string() })),
-        )
-            .into_response()
+        (status, Json(json!({ "error": self.to_string() }))).into_response()
     }
 }
 
@@ -125,16 +113,14 @@ pub struct LoggedEvent {
 async fn events(
     State(api): State<Api>,
     Query(q): Query<EventsQuery>,
-) -> Result<Json<Vec<LoggedEvent>>, ApiError> {
+) -> Result<Json<Vec<LoggedEvent>>, GameError> {
     let page = api
         .game
         .store()
-        .events_after(q.after, q.limit.clamp(1, 5000))
-        .await
-        .map_err(GameError::from)?;
+        .events_after(q.after, q.limit.clamp(1, 5000));
+    let page = page.await.map_err(GameError::from)?.into_iter();
     Ok(Json(
-        page.into_iter()
-            .map(|(seq, event)| LoggedEvent { seq, event })
+        page.map(|(seq, event)| LoggedEvent { seq, event })
             .collect(),
     ))
 }
@@ -154,15 +140,15 @@ struct InterveneBody {
 async fn intervene(
     State(api): State<Api>,
     Json(b): Json<InterveneBody>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<Value>, GameError> {
     let seq = api
         .game
         .intervene(&b.title, &b.text, b.effects, b.empire.as_ref())
         .await?;
-    Ok(Json(serde_json::json!({ "seq": seq })))
+    Ok(Json(json!({ "seq": seq })))
 }
 
-async fn tick(State(api): State<Api>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn tick(State(api): State<Api>) -> Result<Json<Value>, GameError> {
     let tick = api.game.force_close().await?;
-    Ok(Json(serde_json::json!({ "tick": tick })))
+    Ok(Json(json!({ "tick": tick })))
 }

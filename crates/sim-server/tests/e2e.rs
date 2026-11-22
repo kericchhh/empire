@@ -9,11 +9,9 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::{Value, json};
 use sim_core::SeatId;
-use sim_server::game::{Config, Game};
-use sim_server::http::{HttpConfig, LoggedEvent, router};
-use sim_server::store::Store;
+use sim_server::http::LoggedEvent;
 
-const TINY: &str = include_str!("../../sim-core/tests/fixtures/tiny.yaml");
+mod common;
 
 struct Server {
     addr: SocketAddr,
@@ -26,23 +24,7 @@ type Client = RunningService<RoleClient, ClientConfig>;
 
 impl Server {
     async fn start() -> Self {
-        let store = Store::in_memory().await.unwrap();
-        let config = Config {
-            tick_deadline: Duration::from_secs(3600),
-            autoplay: false,
-        };
-        let created = Game::open(store, Some(TINY), 7, config).await.unwrap();
-        let app = router(
-            created.game,
-            HttpConfig {
-                admin_token: created.admin_token.clone(),
-                allowed_hosts: vec![],
-                max_wait: Duration::from_millis(200),
-            },
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await });
+        let (created, addr) = common::serve(Duration::from_secs(3600)).await;
         Self {
             addr,
             admin: created.admin_token,
@@ -94,6 +76,10 @@ async fn call(client: &Client, tool: &'static str, args: Value) -> CallToolResul
         .call_tool(CallToolRequestParams::new(tool).with_arguments(map))
         .await
         .unwrap()
+}
+
+async fn look(client: &Client, token: &str) -> Value {
+    ok(call(client, "look", json!({ "seat_token": token })).await)
 }
 
 fn ok(r: CallToolResult) -> Value {
@@ -184,7 +170,7 @@ async fn two_agents_play_a_tick_over_mcp() {
         json!({ "seat_token": ct, "from": "queen", "to": "duke", "text": "Kneel" }),
     )
     .await);
-    let seen = ok(call(&rival, "look", json!({ "seat_token": rt })).await);
+    let seen = look(&rival, &rt).await;
     assert!(seen.to_string().contains("«Kneel»"));
 
     let first = ok(call(&crown, "end_turn", json!({ "seat_token": ct, "tick": 0 })).await);
@@ -293,8 +279,8 @@ async fn an_intervention_can_be_announced_to_one_empire() {
     assert_eq!(r.status(), 200);
     let pirates = s.mcp().await;
     let crown = s.mcp().await;
-    let p = ok(call(&pirates, "look", json!({ "seat_token": s.tok("pirates") })).await);
-    let c = ok(call(&crown, "look", json!({ "seat_token": s.tok("crown") })).await);
+    let p = look(&pirates, &s.tok("pirates")).await;
+    let c = look(&crown, &s.tok("crown")).await;
     assert!(p.to_string().contains("A storm wrecks the fleet"));
     assert!(!c.to_string().contains("A storm wrecks the fleet"));
 }
@@ -358,13 +344,13 @@ async fn the_game_master_rules_on_a_secret_plan_over_mcp() {
     .await);
     s.post("/tick", json!({})).await;
 
-    let rival_view = ok(call(&rival, "look", json!({ "seat_token": rt })).await);
+    let rival_view = look(&rival, &rt).await;
     assert!(
         !rival_view.to_string().contains("Poison"),
         "plans stay secret from their target"
     );
 
-    let gm_view = ok(call(&gm, "look", json!({ "seat_token": gt })).await);
+    let gm_view = look(&gm, &gt).await;
     let pending = gm_view["perception"]["pending_rulings"][0]["id"]
         .as_str()
         .unwrap()
@@ -392,9 +378,9 @@ async fn the_game_master_rules_on_a_secret_plan_over_mcp() {
     assert_eq!(ok(by_seat)["results"][0]["accepted"], false);
 
     s.post("/tick", json!({})).await;
-    let crown_view = ok(call(&crown, "look", json!({ "seat_token": ct })).await);
+    let crown_view = look(&crown, &ct).await;
     assert!(crown_view.to_string().contains("«The duke falls ill»"));
-    let rival_view = ok(call(&rival, "look", json!({ "seat_token": rt })).await);
+    let rival_view = look(&rival, &rt).await;
     assert!(
         !rival_view.to_string().contains("falls ill"),
         "private ruling by default"

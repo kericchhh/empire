@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{Json, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
@@ -16,17 +15,11 @@ pub const MAX_WAIT: Duration = Duration::from_secs(25);
 pub struct EmpireMcp {
     game: Game,
     max_wait: Duration,
-    #[allow(dead_code, reason = "read by the tool_handler macro")]
-    tool_router: ToolRouter<Self>,
 }
 
 impl EmpireMcp {
     pub fn new(game: Game, max_wait: Duration) -> Self {
-        Self {
-            game,
-            max_wait,
-            tool_router: Self::tool_router(),
-        }
+        Self { game, max_wait }
     }
 }
 
@@ -91,8 +84,17 @@ pub struct Done {
     pub ok: bool,
 }
 
-fn err(e: GameError) -> String {
-    e.to_string()
+/// Game errors reach the agent as tool errors it can read, not protocol failures.
+fn reply<T>(r: Result<T, GameError>) -> Result<Json<T>, String> {
+    r.map(Json).map_err(|e| e.to_string())
+}
+
+fn done(r: Result<(), GameError>) -> Result<Json<Done>, String> {
+    reply(r.map(|()| Done { ok: true }))
+}
+
+fn orders(r: Result<Vec<OrderResult>, GameError>) -> Result<Json<OrdersView>, String> {
+    reply(r.map(|results| OrdersView { results }))
 }
 
 #[tool_router]
@@ -103,7 +105,7 @@ impl EmpireMcp {
         they can take, the empire and regions they can see, and recent events."
     )]
     async fn join(&self, Parameters(a): Parameters<SeatArgs>) -> Result<Json<TurnView>, String> {
-        self.game.join(&a.seat_token).await.map(Json).map_err(err)
+        reply(self.game.join(&a.seat_token).await)
     }
 
     #[tool(
@@ -115,11 +117,7 @@ impl EmpireMcp {
         &self,
         Parameters(a): Parameters<SeatArgs>,
     ) -> Result<Json<TurnView>, String> {
-        self.game
-            .wait_for_turn(&a.seat_token, self.max_wait)
-            .await
-            .map(Json)
-            .map_err(err)
+        reply(self.game.wait_for_turn(&a.seat_token, self.max_wait).await)
     }
 
     #[tool(
@@ -127,7 +125,7 @@ impl EmpireMcp {
         messages that arrived during this tick. Does not end your turn."
     )]
     async fn look(&self, Parameters(a): Parameters<SeatArgs>) -> Result<Json<TurnView>, String> {
-        self.game.look(&a.seat_token).await.map(Json).map_err(err)
+        reply(self.game.look(&a.seat_token).await)
     }
 
     #[tool(
@@ -136,11 +134,7 @@ impl EmpireMcp {
         tick closes. Orders accumulate until you call end_turn."
     )]
     async fn act(&self, Parameters(a): Parameters<ActArgs>) -> Result<Json<OrdersView>, String> {
-        self.game
-            .act(&a.seat_token, a.tick, a.orders)
-            .await
-            .map(|results| Json(OrdersView { results }))
-            .map_err(err)
+        orders(self.game.act(&a.seat_token, a.tick, a.orders).await)
     }
 
     #[tool(
@@ -149,11 +143,7 @@ impl EmpireMcp {
         actions expire when the tick closes."
     )]
     async fn rule(&self, Parameters(a): Parameters<RuleArgs>) -> Result<Json<OrdersView>, String> {
-        self.game
-            .rule(&a.seat_token, a.tick, a.rulings)
-            .await
-            .map(|results| Json(OrdersView { results }))
-            .map_err(err)
+        orders(self.game.rule(&a.seat_token, a.tick, a.rulings).await)
     }
 
     #[tool(
@@ -162,11 +152,11 @@ impl EmpireMcp {
         immediately; the recipient sees it in look or their next turn."
     )]
     async fn message(&self, Parameters(a): Parameters<MessageArgs>) -> Result<Json<Done>, String> {
-        self.game
-            .message(&a.seat_token, &a.from, &a.to, &a.text)
-            .await
-            .map(|()| Json(Done { ok: true }))
-            .map_err(err)
+        done(
+            self.game
+                .message(&a.seat_token, &a.from, &a.to, &a.text)
+                .await,
+        )
     }
 
     #[tool(
@@ -174,11 +164,7 @@ impl EmpireMcp {
         in your perception every turn, so record plans, promises and grudges here."
     )]
     async fn note(&self, Parameters(a): Parameters<NoteArgs>) -> Result<Json<Done>, String> {
-        self.game
-            .note(&a.seat_token, &a.character, &a.text)
-            .await
-            .map(|()| Json(Done { ok: true }))
-            .map_err(err)
+        done(self.game.note(&a.seat_token, &a.character, &a.text).await)
     }
 
     #[tool(
@@ -189,16 +175,11 @@ impl EmpireMcp {
         &self,
         Parameters(a): Parameters<TurnArgs>,
     ) -> Result<Json<EndTurnView>, String> {
-        self.game
-            .end_turn(&a.seat_token, a.tick)
-            .await
-            .map(Json)
-            .map_err(err)
+        reply(self.game.end_turn(&a.seat_token, a.tick).await)
     }
 }
 
 #[tool_handler(
-    router = self.tool_router,
     instructions = "You are playing a seat for one empire in a world shared by several. Loop: \
         join once, then repeat wait_for_turn -> read your perception -> optionally message and \
         note -> act -> end_turn. The world has no scripted ending; what happens comes from every \
