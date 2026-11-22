@@ -4,9 +4,9 @@ The state of the project at the end of the first working session (2026-11-22), f
 
 ## Where things stand
 
-The simulation core and its MCP host are built and reviewed. The second session (2026-11-22) made scenarios setting-only and added several empires per world, the first slice of Phase 1. The hex map, actions between empires, the runner and the app are still to come. `AGENTS.md` describes the target design, and its workspace table marks what is still planned.
+The simulation core and its MCP host are built and reviewed. The second session (2026-11-22) made scenarios setting-only and added several empires per world, the first slice of Phase 1. The third change added `sim-runner`: one Claude Code login can play every seat, each turn in a fresh isolated run. The hex map, actions between empires, Codex support in the runner and the app are still to come. `AGENTS.md` describes the target design, and its workspace table marks what is still planned.
 
-Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`. It passes with 105 tests.
+Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`. It passes with 118 tests.
 
 ### Built
 
@@ -102,9 +102,11 @@ Also closed: a character with no region can't default to an action that affects 
 - Contacts: extend `Sight` and `knows` with which empires have met and which tiles are in sight, instead of every empire knowing every other by name.
 
 **Phase 2: `sim-runner`.**
-- Read the current Codex and Claude Code docs for headless runs and per-run MCP setup first.
-- Configure one CLI per seat. Each turn, launch it with the seat token and a short play-loop prompt (the server's `instructions` text already states the loop).
-- Add timeouts, capped concurrency and logs per seat.
+- Done: Claude Code seats (`--agents FILE`). Runs are isolated: `--tools ""`, only the turn's MCP tools (`join` and `wait_for_turn` are denied, so a run cannot drift into the next tick), `--strict-mcp-config`, `--restricted`, no session persistence, an empty working directory under the private log directory, a cleared environment (no `ANTHROPIC_API_KEY`), the token on stdin. A shared concurrency cap, per-turn timeouts, logs under `<db>.runs/` (mode 0700). The runner skips a turn whose tick closed while it queued, kills a run once its tick closes, and ends each seat's turn after its run, so a crashed or slow agent never holds up the tick.
+- The game master seat is refused for now: its run would start with the others, before there is anything to rule on. Start it once only the game master is left to end its turn (expose `waiting_for` to it, or give it a later phase of the tick).
+- `--restricted` ignores settings files but not the user's global `CLAUDE.md`. Look for a flag that turns off its discovery without `--bare`, which needs an API key.
+- Next: a `codex` agent kind (`codex exec` with a per-run MCP config and sandboxing; read its docs first), and a generic `command` kind for local-model scripts.
+- A timed-out run is killed, but not any processes it spawned. Claude Code runs have no shell tool, so this matters only once other agent kinds arrive: kill the process group then.
 
 **Phase 3: the Tauri app in `app/`.**
 - Read the Tauri v2 docs first.

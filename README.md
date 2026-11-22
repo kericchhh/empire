@@ -18,11 +18,38 @@ On first start the server creates the world and prints one **admin token** and o
 | `--autoplay` | Advance on the deadline even when no seat has joined. The rules run the world alone. |
 | `--seed N` | Seed for random events. The same seed and the same orders give the same history. |
 | `--bind ADDR` | Listen address (default `127.0.0.1:7878`). |
+| `--agents FILE` | Seats that a local agent CLI plays, and how. See below. |
 | `--allowed-host NAME` | Accept MCP requests addressed to this hostname. Needed when agents connect from another machine. |
 
 Other commands: `sim-server check <scenario>` validates a file, and `sim-server schema` prints the JSON Schema that `schema/scenario.schema.json` holds.
 
-## Connect an agent to a seat
+## Let Claude Code play the seats
+
+One subscription can play any number of seats, in one empire or in rival ones. List them in an agents file and pass it to `run`:
+
+```sh
+cargo run -p sim-server -- run --db rome.db --scenario scenarios/rome.yaml --agents agents/rome-claude.yaml
+```
+
+```yaml
+max_concurrent: 2          # agent runs at once, across all seats
+turn_timeout_seconds: 240
+seats:
+  princeps: { claude: { model: sonnet } }
+  parthia:  { claude: { model: haiku, effort: low } }
+```
+
+Each turn, every listed seat gets a fresh headless `claude -p` run that knows only its own seat token. Seats of rival empires on the same login stay apart:
+
+- the run has no built-in tools, so no files and no shell, only the world's MCP tools for one turn (`look`, `act`, `rule`, `message`, `note`, `end_turn`);
+- it loads no settings files and keeps no session, and it starts in an empty working directory with a cleared environment. Your global `~/.claude/CLAUDE.md` may still load, the same for every seat;
+- what a character remembers between turns is its `note`s.
+
+When a run finishes, times out, or its tick closes on the deadline, the runner stops it and ends the seat's turn. Each run's output goes to `<db>.runs/<seat>/tick-<n>.jsonl`, readable only by you since it holds the seat's token (change the location with `--runs DIR`). Runs queue for `max_concurrent` slots, so keep `ceil(seats / max_concurrent) × turn_timeout_seconds` below `--tick-seconds`; the server warns when it isn't. The game master seat can't be given to the runner yet, because it would rule before the other seats act.
+
+Seats you leave out work as before: connect an agent yourself, or leave them to the rules engine.
+
+## Connect an agent to a seat yourself
 
 Register the server once in each harness:
 
