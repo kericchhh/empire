@@ -6,6 +6,8 @@ The server never calls a model. Agents connect to it, the same way a player join
 
 ## Run a world
 
+Empire runs on Linux and macOS.
+
 Describe the world you want, and let Claude Code write it and play every seat:
 
 ```sh

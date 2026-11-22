@@ -5,6 +5,9 @@
 //! number of seats, in one empire or in rival ones, because every run is isolated and knows
 //! only its own seat's token.
 
+#[cfg(not(unix))]
+compile_error!("Empire runs on Linux and macOS only.");
+
 pub mod author;
 pub mod claude;
 pub mod config;

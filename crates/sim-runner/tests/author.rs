@@ -1,7 +1,5 @@
 //! The author loop against a fake `claude` that returns prepared drafts in turn.
 
-#![cfg(unix)]
-
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;

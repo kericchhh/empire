@@ -31,6 +31,8 @@ These rules hold everywhere. A feature that breaks one is a design change: raise
 
 ## Workspace
 
+The game runs on Linux and macOS only. Windows is a later feature: write no Windows-specific code until then.
+
 | Path | Owns |
 |---|---|
 | `crates/sim-core` | Scenario format, the standard ruleset (`rules/standard.yaml`), world state, events, rules engine, perception. Pure and deterministic. |
