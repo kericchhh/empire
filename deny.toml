@@ -17,6 +17,9 @@ allow = [
   "ISC",
   "MIT",
   "MIT-0",
+  # Weak, file-level copyleft: only changes to those crates' own files must be shared. Tauri's
+  # HTML and directory dependencies (cssparser, selectors, dtoa-short, option-ext) use it.
+  "MPL-2.0",
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
