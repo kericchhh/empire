@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::event::{Effect, Event, EventKind, Target, Visibility};
 use crate::ids::*;
-use crate::ruleset::{RegionSight, TargetKind, ValueRef};
+use crate::ruleset::{RegionSight, StatDef, TargetKind, ValueRef};
 use crate::state::State;
 use crate::world::World;
 
@@ -151,21 +152,13 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
                 id: c.id.clone(),
                 name: c.name.clone(),
                 title: c.title.clone(),
-                office: office.map_or_else(|| cs.office.to_string(), |o| o.name.clone()),
+                office: label(office.map(|o| &o.name), &cs.office),
                 office_description: office.map_or_else(String::new, |o| o.description.clone()),
                 region: cs.region.clone(),
                 persona: c.persona.clone(),
                 goals: c.goals.clone(),
                 secrets: c.secrets.clone(),
-                resources: rules
-                    .resources
-                    .iter()
-                    .map(|r| Number {
-                        id: r.id.0.clone(),
-                        name: r.name.clone(),
-                        value: cs.resources.get(&r.id).copied().unwrap_or(0.0),
-                    })
-                    .collect(),
+                resources: numbers(&rules.resources, |_| true, |r| cs.resources.get(r).copied()),
                 notes: cs.notes.clone(),
                 actions: office
                     .into_iter()
@@ -192,16 +185,11 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
             name: e.name.clone(),
             description: e.description.clone(),
             culture: e.culture.clone(),
-            metrics: rules
-                .metrics
-                .iter()
-                .filter(|m| sight.metric(&e.id, &m.id))
-                .map(|m| Number {
-                    id: m.id.0.clone(),
-                    name: m.name.clone(),
-                    value: state.metric(&e.id, &m.id).unwrap_or(0.0),
-                })
-                .collect(),
+            metrics: numbers(
+                &rules.metrics,
+                |m| sight.metric(&e.id, m),
+                |m| state.metric(&e.id, m),
+            ),
         })
         .collect();
 
@@ -215,16 +203,11 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
             name: r.name.clone(),
             description: r.description.clone(),
             owner: rs.owner.clone(),
-            stats: rules
-                .region_stats
-                .iter()
-                .filter(|s| sight.stat(&s.id))
-                .map(|s| Number {
-                    id: s.id.0.clone(),
-                    name: s.name.clone(),
-                    value: rs.stats.get(&s.id).copied().unwrap_or(0.0),
-                })
-                .collect(),
+            stats: numbers(
+                &rules.region_stats,
+                |s| sight.stat(s),
+                |s| rs.stats.get(s).copied(),
+            ),
         })
         .collect();
 
@@ -237,9 +220,7 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
             id: c.id.clone(),
             name: c.name.clone(),
             title: c.title.clone(),
-            office: rules
-                .office(&cs.office)
-                .map_or_else(|| cs.office.to_string(), |o| o.name.clone()),
+            office: label(rules.office(&cs.office).map(|o| &o.name), &cs.office),
             empire: cs.empire.clone(),
             region: sight.region(&cs.region).then(|| cs.region.clone()),
         })
@@ -252,19 +233,16 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
         .filter_map(|e| describe(w, e, &sight).map(|d| format!("[{}] {d}", w.date(e.tick))))
         .collect();
 
-    let pending_rulings = if gm {
-        state
-            .pending
-            .iter()
-            .map(|(id, p)| PendingView {
-                id: id.clone(),
-                character: p.character.clone(),
-                text: p.text.clone(),
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let pending_rulings = state
+        .pending
+        .iter()
+        .filter(|_| gm)
+        .map(|(id, p)| PendingView {
+            id: id.clone(),
+            character: p.character.clone(),
+            text: p.text.clone(),
+        })
+        .collect();
 
     Some(Perception {
         world: WorldView {
@@ -286,37 +264,49 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
     })
 }
 
+/// One number per definition this observer may see, in ruleset order.
+fn numbers<Id: fmt::Display>(
+    defs: &[StatDef<Id>],
+    visible: impl Fn(&Id) -> bool,
+    value: impl Fn(&Id) -> Option<f64>,
+) -> Vec<Number> {
+    defs.iter()
+        .filter(|d| visible(&d.id))
+        .map(|d| Number {
+            id: d.id.to_string(),
+            name: d.name.clone(),
+            value: value(&d.id).unwrap_or(0.0),
+        })
+        .collect()
+}
+
+/// A definition's display name, or its bare id when the definition is missing.
+fn label(name: Option<&String>, id: &impl fmt::Display) -> String {
+    name.map_or_else(|| id.to_string(), String::clone)
+}
+
 fn name_of(w: &World, c: &CharacterId) -> String {
-    w.character(c)
-        .map_or_else(|| c.to_string(), |d| d.name.clone())
+    label(w.character(c).map(|d| &d.name), c)
 }
 
 fn target_name(w: &World, t: &Target) -> String {
     match t {
         Target::Metric { empire, metric } => format!(
             "{} of {}",
-            w.rules
-                .metric(metric)
-                .map_or_else(|| metric.to_string(), |d| d.name.clone()),
-            w.empire(empire)
-                .map_or_else(|| empire.to_string(), |d| d.name.clone()),
+            label(w.rules.metric(metric).map(|d| &d.name), metric),
+            label(w.empire(empire).map(|d| &d.name), empire),
         ),
         Target::Stat { region, stat } => format!(
             "{} in {}",
-            w.rules
-                .region_stat(stat)
-                .map_or_else(|| stat.to_string(), |d| d.name.clone()),
-            w.region(region)
-                .map_or_else(|| region.to_string(), |d| d.name.clone()),
+            label(w.rules.region_stat(stat).map(|d| &d.name), stat),
+            label(w.region(region).map(|d| &d.name), region),
         ),
         Target::Resource {
             character,
             resource,
         } => format!(
             "{} of {}",
-            w.rules
-                .resource(resource)
-                .map_or_else(|| resource.to_string(), |d| d.name.clone()),
+            label(w.rules.resource(resource).map(|d| &d.name), resource),
             name_of(w, character),
         ),
     }
@@ -337,7 +327,7 @@ fn effects_text(w: &World, sight: &Sight, effects: &[Effect]) -> String {
 /// What numbers one observer may see. The only place visibility of numbers is decided.
 /// A seat sees its own empire's metrics that its offices may see, the regions its offices
 /// look over, and its own characters' resources. Nothing of other empires' numbers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Sight {
     all: bool,
     empire: Option<EmpireId>,
@@ -352,11 +342,7 @@ impl Sight {
     pub fn all() -> Self {
         Self {
             all: true,
-            empire: None,
-            metrics: BTreeSet::new(),
-            stats: BTreeSet::new(),
-            regions: BTreeSet::new(),
-            characters: BTreeSet::new(),
+            ..Self::default()
         }
     }
 
@@ -380,18 +366,8 @@ impl Sight {
         Some(Self {
             all: false,
             empire: Some(empire.clone()),
-            metrics: rules
-                .metrics
-                .iter()
-                .filter(|m| offices.iter().any(|o| m.visible_to_office(o)))
-                .map(|m| m.id.clone())
-                .collect(),
-            stats: rules
-                .region_stats
-                .iter()
-                .filter(|s| offices.iter().any(|o| s.visible_to_office(o)))
-                .map(|s| s.id.clone())
-                .collect(),
+            metrics: visible_to(&rules.metrics, &offices),
+            stats: visible_to(&rules.region_stats, &offices),
             regions: if sees_empire {
                 state.regions_of(empire).cloned().collect()
             } else {
@@ -434,6 +410,17 @@ impl Sight {
             Target::Resource { character, .. } => self.all || self.characters.contains(character),
         }
     }
+}
+
+/// The numbers any of `offices` may see.
+fn visible_to<Id: Clone + Ord>(
+    defs: &[StatDef<Id>],
+    offices: &BTreeSet<&OfficeId>,
+) -> BTreeSet<Id> {
+    defs.iter()
+        .filter(|d| offices.iter().any(|o| d.visible_to_office(o)))
+        .map(|d| d.id.clone())
+        .collect()
 }
 
 fn round(v: f64) -> f64 {
@@ -491,7 +478,7 @@ pub fn describe(w: &World, e: &Event, sight: &Sight) -> Option<String> {
             effects,
         } => {
             let adef = w.rules.action(action);
-            let aname = adef.map_or_else(|| action.to_string(), |a| a.name.clone());
+            let aname = label(adef.map(|a| &a.name), action);
             let on = target
                 .as_ref()
                 .and_then(|t| {
@@ -790,7 +777,7 @@ mod tests {
 
     #[test]
     fn action_targets_are_named_by_the_actions_target_kind() {
-        let mut sc = s_tiny_scenario();
+        let mut sc = crate::scenario::Scenario::from_yaml(TINY).unwrap();
         let mut duchy = sc.empires[0].regions[0].clone();
         duchy.id = "duke".into();
         duchy.name = "The Duchy".into();
@@ -800,9 +787,5 @@ mod tests {
         s.close(&[act("crown", "queen", "spy", Some("duke"))]);
         let crown = recent(&s, "crown");
         assert!(crown.contains("Spy on Duke Bors"), "{crown}");
-    }
-
-    fn s_tiny_scenario() -> crate::scenario::Scenario {
-        crate::scenario::Scenario::from_yaml(TINY).unwrap()
     }
 }
