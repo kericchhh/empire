@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/sim-core", "crates/sim-server"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[workspace.dependencies]
+sim-core = { path = "crates/sim-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
+schemars = "1.2.3"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+rand = "0.10.4"

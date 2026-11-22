@@ -1,0 +1,66 @@
+name: Tiny Kingdom
+calendar: { start_year: 1, periods: [Spring, Autumn] }
+culture: { religion: The Old Gods }
+metrics:
+  - { id: gold, name: Gold, initial: 100, visible_to: [ruler] }
+  - { id: order, name: Order, initial: 0.5, min: 0, max: 1 }
+region_stats:
+  - { id: unrest, name: Unrest, initial: 0.2, min: 0, max: 1 }
+resources:
+  - { id: favor, name: Favor, initial: 2, min: 0 }
+regions:
+  - { id: north, name: The North }
+  - { id: south, name: The South, stats: { unrest: 0.9 } }
+roles:
+  - id: ruler
+    name: Ruler
+    actions: [decree, feast, spy]
+  - id: folk
+    name: Folk
+    actions: [work]
+    default_action: work
+    region_sight: home
+characters:
+  - { id: queen, name: Queen Ada, role: ruler, region: north }
+  - { id: duke, name: Duke Bors, role: ruler, region: south, resources: { favor: 0 } }
+  - { id: northfolk, name: Northfolk, role: folk, region: north }
+seats:
+  - { id: crown, name: The Crown, controls: [queen] }
+  - { id: rival, name: The Rival, controls: [duke] }
+  - { id: folk, name: The Folk, controls: [northfolk] }
+  - { id: gm, name: Game Master, game_master: true }
+actions:
+  - id: decree
+    name: Decree
+    cost: { favor: 1 }
+    effects: [{ target: { metric: order }, delta: 0.1 }]
+  - id: feast
+    name: Feast
+    target: region
+    effects:
+      - { target: { metric: gold }, delta: -10 }
+      - { target: { stat: unrest }, delta: -0.5 }
+  - id: spy
+    name: Spy
+    target: character
+    secret: true
+    effects: [{ target: { target_resource: favor }, delta: -1 }]
+  - id: work
+    name: Work
+    effects: [{ target: { metric: gold }, delta: 1 }]
+rules:
+  - id: unrest_hurts
+    label: Trouble in {region}
+    scope: each_region
+    when: { value: { stat: unrest }, above: 0.8, for_ticks: 2 }
+    effects: [{ target: { metric: order }, delta: -0.2 }]
+endings:
+  - id: chaos
+    label: Chaos takes the kingdom
+    when: { value: { metric: order }, below: 0.05 }
+limits:
+  orders_per_character: 2
+  text_chars: 50
+  notes_kept: 2
+  ruling_max_delta: 0.3
+  ruling_max_effects: 1

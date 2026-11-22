@@ -1,0 +1,10 @@
+---
+source: crates/sim-core/tests/golden.rs
+assertion_line: 29
+expression: state.metrics
+---
+culture: 0.4
+legitimacy: 0.45
+military: 0.25999999999999956
+stability: 0
+treasury: 521.6000000000001

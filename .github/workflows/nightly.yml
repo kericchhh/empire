@@ -1,0 +1,55 @@
+# Checks that are too slow for every PR, or that can start failing with no code change.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTFLAGS: -D warnings
+  INSTA_UPDATE: "no"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  proptest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # The replay-invariant proptest and every other proptest run 40x the default 256 cases.
+      PROPTEST_CASES: "10000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Dependent-only cache from main; this job never needs to write one.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: "false"
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest@0.9
+      # -p sim-core: it hosts the proptests, and building sim-server would need web/dist.
+      - run: cargo nextest run -p sim-core --locked --no-tests=fail
+
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-deny@0.22
+      - run: cargo deny --locked check advisories

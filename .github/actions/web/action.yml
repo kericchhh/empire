@@ -1,0 +1,35 @@
+name: Web setup
+description: Install Node and web/ dependencies with the package manager named by the detect job.
+inputs:
+  pm:
+    description: pnpm, npm or yarn.
+    required: true
+  lockfile:
+    description: Lockfile name inside web/, used as the dependency cache key.
+    required: true
+runs:
+  using: composite
+  steps:
+    # pnpm/action-setup reads the version from "packageManager" in web/package.json.
+    - if: inputs.pm == 'pnpm'
+      uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      with:
+        package_json_file: web/package.json
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: lts/*
+        cache: ${{ inputs.pm }}
+        cache-dependency-path: web/${{ inputs.lockfile }}
+    - name: Install dependencies
+      shell: bash
+      working-directory: web
+      env:
+        PM: ${{ inputs.pm }}
+      run: |
+        case "$PM" in
+          pnpm) pnpm install --frozen-lockfile ;;
+          npm) npm ci ;;
+          yarn)
+            corepack enable
+            if grep -q '^__metadata' yarn.lock; then yarn install --immutable; else yarn install --frozen-lockfile; fi ;;
+        esac

@@ -1,0 +1,866 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scenario",
+  "type": "object",
+  "properties": {
+    "actions": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ActionDef"
+      }
+    },
+    "calendar": {
+      "$ref": "#/$defs/Calendar"
+    },
+    "characters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CharacterDef"
+      }
+    },
+    "culture": {
+      "description": "Free-form facts every seat knows: religion, ideology, lifestyle, values.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "description": {
+      "type": "string",
+      "default": ""
+    },
+    "endings": {
+      "description": "Conditions that end the simulation: triumph, collapse, anything in between.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EndingDef"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits",
+      "default": {
+        "chat_per_seat": 10,
+        "notes_kept": 12,
+        "orders_per_character": 2,
+        "ruling_max_delta": 0.2,
+        "ruling_max_effects": 4,
+        "text_chars": 1200
+      }
+    },
+    "metrics": {
+      "description": "Empire-wide numbers.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/StatDef"
+      }
+    },
+    "name": {
+      "type": "string"
+    },
+    "region_stats": {
+      "description": "Numbers every region carries.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/StatDef2"
+      }
+    },
+    "regions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RegionDef"
+      }
+    },
+    "resources": {
+      "description": "Numbers every character carries.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/StatDef3"
+      }
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RoleDef"
+      }
+    },
+    "rules": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuleDef"
+      }
+    },
+    "seats": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SeatDef"
+      }
+    },
+    "theme": {
+      "$ref": "#/$defs/Theme",
+      "default": {
+        "font_body": null,
+        "font_display": null,
+        "palette": [],
+        "terms": {}
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "calendar",
+    "regions",
+    "roles",
+    "characters",
+    "seats"
+  ],
+  "$defs": {
+    "ActionDef": {
+      "type": "object",
+      "properties": {
+        "cost": {
+          "description": "Resources the actor spends. The action is rejected if any would drop below zero.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {}
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "effects": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EffectDef"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "description": "Visible only to the actor's seat and the game master.",
+          "type": "boolean",
+          "default": false
+        },
+        "target": {
+          "$ref": "#/$defs/TargetKind",
+          "default": "none"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "Calendar": {
+      "type": "object",
+      "properties": {
+        "negative_suffix": {
+          "description": "Suffix for years below zero, e.g. \"BC\". Without it, negative years print as-is.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "periods": {
+          "description": "One name per tick in a year, e.g. the four seasons.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "positive_suffix": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "start_year": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start_year",
+        "periods"
+      ]
+    },
+    "CharacterDef": {
+      "type": "object",
+      "properties": {
+        "goals": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "$ref": "#/$defs/CharacterId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "persona": {
+          "type": "string",
+          "default": ""
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "resources": {
+          "description": "Overrides of `resources` initial values.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {}
+        },
+        "role": {
+          "type": "string"
+        },
+        "secrets": {
+          "description": "Known only to this character's seat and the game master.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "role"
+      ]
+    },
+    "CharacterId": {
+      "description": "A named individual played by a seat.",
+      "type": "string"
+    },
+    "Condition": {
+      "type": "object",
+      "properties": {
+        "above": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "below": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "for_ticks": {
+          "description": "Consecutive ticks the condition must hold before it counts.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "value": {
+          "$ref": "#/$defs/ValueRef"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "EffectDef": {
+      "description": "A change written in a scenario, resolved to concrete targets at run time.",
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "number",
+          "format": "double"
+        },
+        "scale_by": {
+          "description": "Multiply `delta` by this value read in the same scope.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target": {
+          "$ref": "#/$defs/EffectTarget"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "delta"
+      ]
+    },
+    "EffectTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "metric": {
+              "$ref": "#/$defs/MetricId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "metric"
+          ]
+        },
+        {
+          "description": "The region in scope: the action's target region, else the actor's home region,\nor the region a per-region rule is evaluating.",
+          "type": "object",
+          "properties": {
+            "stat": {
+              "$ref": "#/$defs/StatId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "stat"
+          ]
+        },
+        {
+          "description": "Every region.",
+          "type": "object",
+          "properties": {
+            "all_regions": {
+              "$ref": "#/$defs/StatId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "all_regions"
+          ]
+        },
+        {
+          "description": "The acting character.",
+          "type": "object",
+          "properties": {
+            "resource": {
+              "$ref": "#/$defs/ResourceId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "resource"
+          ]
+        },
+        {
+          "description": "The character an action targets.",
+          "type": "object",
+          "properties": {
+            "target_resource": {
+              "$ref": "#/$defs/ResourceId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "target_resource"
+          ]
+        }
+      ]
+    },
+    "EndingDef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "when": {
+          "description": "Evaluated at empire scope.",
+          "$ref": "#/$defs/Condition"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "when"
+      ]
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "chat_per_seat": {
+          "description": "Messages plus notes one seat may write per tick.",
+          "type": "integer",
+          "format": "uint",
+          "default": 10,
+          "minimum": 0
+        },
+        "notes_kept": {
+          "type": "integer",
+          "format": "uint",
+          "default": 12,
+          "minimum": 0
+        },
+        "orders_per_character": {
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "minimum": 0
+        },
+        "ruling_max_delta": {
+          "description": "Largest absolute delta a game-master ruling may apply per effect.",
+          "type": "number",
+          "format": "double",
+          "default": 0.2
+        },
+        "ruling_max_effects": {
+          "type": "integer",
+          "format": "uint",
+          "default": 4,
+          "minimum": 0
+        },
+        "text_chars": {
+          "type": "integer",
+          "format": "uint",
+          "default": 1200,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "MetricId": {
+      "description": "An empire-wide number such as treasury or stability.",
+      "type": "string"
+    },
+    "RegionDef": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "stats": {
+          "description": "Overrides of `region_stats` initial values.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "RegionSight": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "all"
+          ]
+        },
+        {
+          "description": "Only the character's home region.",
+          "type": "string",
+          "const": "home"
+        }
+      ]
+    },
+    "ResourceId": {
+      "description": "A per-character number such as influence or wealth.",
+      "type": "string"
+    },
+    "RoleDef": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "Actions characters in this role may take.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_action": {
+          "description": "Taken for a character whose seat submitted no action this tick.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "region_sight": {
+          "$ref": "#/$defs/RegionSight",
+          "default": "all"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "RuleDef": {
+      "type": "object",
+      "properties": {
+        "chance": {
+          "description": "Probability of firing per tick (per region for regional rules) once `when` holds.",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EffectDef"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "description": "Chronicle line when the rule fires. `{region}` is replaced by the region name.\nRules without a label change numbers silently.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "scope": {
+          "$ref": "#/$defs/RuleScope",
+          "default": "empire"
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "effects"
+      ]
+    },
+    "RuleScope": {
+      "type": "string",
+      "enum": [
+        "empire",
+        "each_region"
+      ]
+    },
+    "SeatDef": {
+      "type": "object",
+      "properties": {
+        "controls": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CharacterId"
+          }
+        },
+        "game_master": {
+          "description": "Sees everything and rules on free-form actions.",
+          "type": "boolean",
+          "default": false
+        },
+        "id": {
+          "$ref": "#/$defs/SeatId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "SeatId": {
+      "description": "A slot that one external agent or human claims with a token.",
+      "type": "string"
+    },
+    "StatDef": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "$ref": "#/$defs/MetricId"
+        },
+        "initial": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "visible_to": {
+          "description": "Roles that can see this number. Empty means everyone.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "StatDef2": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "$ref": "#/$defs/StatId"
+        },
+        "initial": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "visible_to": {
+          "description": "Roles that can see this number. Empty means everyone.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "StatDef3": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "initial": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "visible_to": {
+          "description": "Roles that can see this number. Empty means everyone.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "StatId": {
+      "description": "A per-region number such as population or unrest.",
+      "type": "string"
+    },
+    "TargetKind": {
+      "type": "string",
+      "enum": [
+        "none",
+        "region",
+        "character"
+      ]
+    },
+    "Theme": {
+      "description": "Presentation hints the UI applies as CSS variables and vocabulary.",
+      "type": "object",
+      "properties": {
+        "font_body": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "font_display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "palette": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "terms": {
+          "description": "Setting vocabulary, e.g. currency -> denarii, ruler -> Imperator.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValueRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "metric": {
+              "$ref": "#/$defs/MetricId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "metric"
+          ]
+        },
+        {
+          "description": "A stat of the region in scope.",
+          "type": "object",
+          "properties": {
+            "stat": {
+              "$ref": "#/$defs/StatId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "stat"
+          ]
+        }
+      ]
+    }
+  }
+}

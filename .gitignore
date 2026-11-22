@@ -1,0 +1,32 @@
+# Rust build output
+target/
+
+# World databases (SQLite and its WAL/SHM files)
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# insta snapshots awaiting review; accepted .snap files are tracked
+*.snap.new
+*.pending-snap
+
+# Frontend (app/ UI)
+node_modules/
+dist/
+
+# Local environment and secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# Local agent settings (shared settings stay tracked)
+.claude/settings.local.json
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

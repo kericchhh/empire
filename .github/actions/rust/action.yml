@@ -1,0 +1,23 @@
+name: Rust setup
+description: Install the toolchain pinned by rust-toolchain.toml, restore the cargo cache and fetch the prebuilt web/dist that sim-server embeds.
+inputs:
+  web:
+    description: "'true' when web/ exists and web/dist must be present before cargo compiles sim-server."
+    default: "false"
+runs:
+  using: composite
+  steps:
+    # Install before rust-cache: the cache key includes the rustc version.
+    - name: Install toolchain
+      shell: bash
+      run: rustup show active-toolchain || rustup toolchain install
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        # PRs restore main's cache but never write one, so they cannot evict it.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Fetch web/dist
+      if: inputs.web == 'true'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: web-dist
+        path: web/dist
