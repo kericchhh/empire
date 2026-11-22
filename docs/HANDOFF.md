@@ -4,33 +4,35 @@ The state of the project at the end of the first working session (2026-11-22), f
 
 ## Where things stand
 
-The single-empire simulation core and its MCP host are built, reviewed once, and fixed. The **multi-empire desktop redesign is decided but not started**. `AGENTS.md` already describes the target design, and its workspace table marks what is still planned.
+The simulation core and its MCP host are built and reviewed. The second session (2026-11-22) made scenarios setting-only and added several empires per world, the first slice of Phase 1. The hex map, actions between empires, the runner and the app are still to come. `AGENTS.md` describes the target design, and its workspace table marks what is still planned.
 
-Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`. It passes with 83 tests.
+Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`. It passes with 102 tests.
 
 ### Built
 
 - **`crates/sim-core`:** pure and deterministic.
-  - `scenario.rs`: the scenario format, with strict validation (`deny_unknown_fields`, every reference checked).
-  - `state.rs`: `State`, changed only by `State::apply(&Event)`.
+  - `scenario.rs`: the scenario format. Setting only: calendar, theme, empires (culture, regions, characters with their office, seats) and an optional game master. Strict validation (`deny_unknown_fields`, every reference checked, ids unique across empires).
+  - `ruleset.rs` and `rules/standard.yaml`: the mechanics every world runs on. Numbers (with a `start_range` for seeded starts), offices, actions, rules and limits. Embedded in the binary and fixed: scenarios cannot change it.
+  - `world.rs`: `World`, a scenario checked against a ruleset. The engine reads everything that is not state from it.
+  - `state.rs`: `State`, changed only by `State::apply(&Event)`. Metrics are per empire; regions carry their owner; characters carry their empire, office and home region.
   - `engine.rs`:
-    - order and ruling validation;
+    - starting values (`WorldGenerated`), order and ruling validation;
     - `close_tick`, which resolves a whole tick into events;
-    - rules with conditions, streaks and chance;
-    - endings;
+    - rules per empire or per region, with conditions, streaks and chance;
     - messages, notes and interventions.
-  - `perceive.rs`: `Sight`, the one place that decides what an observer may see, plus `perceive`, which builds a seat's view, and `describe`, which writes chronicle lines through a `Sight`.
+  - `perceive.rs`: `Sight`, the one place that decides what an observer may see, plus `knows` (which characters an empire knows of), `perceive`, which builds a seat's view, and `describe`, which writes chronicle lines through a `Sight`.
 - **`crates/sim-server`:**
   - `game.rs`: the `Game` service: seats and tokens, turn protocol, deadline scheduler, long-poll, write-ahead commit.
   - `mcp.rs`: 8 MCP tools (rmcp 3.11, streamable HTTP).
   - `http.rs`: admin REST under `/api`, behind a bearer token.
   - `store.rs`: SQLite with one file per world.
   - `main.rs`: the CLI (`run`, `check`, `schema`).
-- **`scenarios/rome.yaml`:** the reference scenario. Left to the rules alone it collapses into civil war around 19 BC, so players have something to save.
+- **`scenarios/rome.yaml`:** the reference scenario, Rome and Parthia in 27 BC. Rome sets its starting numbers; Parthia sets none, so the seed draws them. Left to the rules alone, both decline (Parthia into civil war within a few years at seed 2026), so players have something to save.
 - **Tests:**
   - unit tests next to the code;
   - property tests in `crates/sim-core/tests/replay.rs`: a replayed serialized log rebuilds the live state, a state survives a save and reload, and the same seed gives the same history;
   - golden snapshots in `crates/sim-core/tests/golden.rs`;
+  - engine unit tests run on `tests/fixtures/tiny.yaml` with `tiny_rules.yaml`, so they don't break when the standard ruleset is rebalanced. Server tests run the same scenario on the standard ruleset;
   - a schema sync test;
   - end-to-end tests in `crates/sim-server/tests/e2e.rs`, using real MCP and HTTP clients on an ephemeral port.
 - **Files added outside this session:** `.github/` (CI), `deny.toml` (it also bans provider SDK crates) and `rust-toolchain.toml`. Keep them passing.
@@ -43,6 +45,12 @@ Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -
 3. **`app/`:** a Tauri desktop app with a React UI, hosting the server and runner in-process. No browser UI.
 
 ## Decisions that aren't obvious from the code
+
+- **The scenario is a starting point, never a script.** The user decided that a scenario only describes the setting. Mechanics live in the standard ruleset, and there are no endings: the world runs until it is stopped. A rule like `civil_war` hurts an empire but never stops the world.
+- **Offices, not roles, decide permissions.** A character's `title` ("Princeps", "Poet") is flavour; its `office` (`head_of_state`, `official`, `commander`, `governor`, `private`, `cohort`) decides its actions and sight. Offices are in `State`, so a later appointment or coup event can move them. No event does that yet.
+- **Starting numbers are optional.** Anything a scenario leaves out is drawn from the ruleset's `start_range` with the seed (stream `start-<kind>:<id>@<owner>`), rounded to 0.01. Every starting value, given or drawn, is written into the `WorldGenerated` event, so replay never runs generation again.
+- **Fog between empires:** a seat sees its own empire's numbers through its offices and nothing of another empire's numbers. Foreign empires are known by name, description and culture. Foreign characters are known only if their office is `public` (heads of state), so diplomacy works through them. Actions, rule events and public rulings are visible to the acting empire only (`Visibility::Empire`). Interventions are public unless the admin names an `empire`.
+- **The event schema was reset once, before any world was kept.** `Target::Metric` gained an `empire`, `RuleFired` an `empire`, and `WorldEnded` was removed. Worlds created before this change won't load. From here on, follow the rule in `CODE_RULES.md`: add, never repurpose.
 
 - **Events store resolved effects** (`treasury −40`), never the order that caused them. Replay only applies stored numbers. Rules and RNG never run again, so old logs still replay after rules change.
 - **`serde_json` has `float_roundtrip` enabled** workspace-wide. Without it, an `f64` can come back from JSON one ULP off and silently break replay. The replay property test caught this. Keep it on.
@@ -87,11 +95,11 @@ Also closed: a character with no region can't default to an action that affects 
 ## Next steps, in order
 
 **Phase 1: world model in `sim-core`.**
-- A scenario defines `empires`. Each one gets its own metrics, roles, characters and seats.
-- A hex map of tiles in axial coordinates, with terrain, resources and an owner, generated from the seed or placed by hand. Today's regions become cities or provinces on tiles.
-- Actions between empires: treaties (propose and accept), trade, declaring war, moving armies, settling and conquering tiles.
-- Fog of war, built by extending `Sight` with each empire's visible tiles and contacts.
-- Replace `rome.yaml` with a two-empire Rome vs Carthage, and keep the golden and replay tests across empires.
+- Done: several empires per world, setting-only scenarios, the standard ruleset, offices, seeded starting numbers, fog of war between empires, Rome and Parthia.
+- A hex map of tiles in axial coordinates, with terrain, resources and an owner, generated from the seed (stored in an event, like the starting values) or placed by hand. Today's regions become provinces made of tiles, and starting numbers derive from terrain.
+- Actions between empires: treaties (propose and accept), trade, declaring war, moving armies, settling and conquering tiles. Conquest moves `RegionState::owner`; an empire left with no territory collapses as an event.
+- Office changes: appointments by the head of state, succession when a ruler dies, coups. These move `CharacterState::office`.
+- Contacts: extend `Sight` and `knows` with which empires have met and which tiles are in sight, instead of every empire knowing every other by name.
 
 **Phase 2: `sim-runner`.**
 - Read the current Codex and Claude Code docs for headless runs and per-run MCP setup first.
@@ -105,7 +113,7 @@ Also closed: a character with no region can't default to an action that affects 
 - Build the views:
   - hex map coloured by owner, with overlay layers;
   - dashboards per empire;
-  - role and character views;
+  - office and character views;
   - chronicle;
   - diplomacy graph;
   - agent setup;

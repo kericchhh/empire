@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use sim_core::Scenario;
+use sim_core::{Scenario, World};
 use sim_server::game::{Config, Game};
 use sim_server::http::{HttpConfig, router};
 use sim_server::mcp::MAX_WAIT;
@@ -62,15 +62,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Check { scenario } => {
             let yaml = std::fs::read_to_string(&scenario)
                 .with_context(|| format!("reading {}", scenario.display()))?;
-            let sc = Scenario::from_yaml(&yaml)?;
+            let w = World::standard(Scenario::from_yaml(&yaml)?)?;
+            let sc = &w.scenario;
             println!(
-                "{}: {} regions, {} characters, {} seats, {} actions, {} rules",
+                "{}: {} empires, {} regions, {} characters, {} seats",
                 sc.name,
-                sc.regions.len(),
-                sc.characters.len(),
-                sc.seats.len(),
-                sc.actions.len(),
-                sc.rules.len()
+                sc.empires.len(),
+                sc.regions().count(),
+                sc.characters().count(),
+                sc.seat_ids().count(),
             );
         }
         Command::Run {
@@ -99,16 +99,20 @@ async fn main() -> anyhow::Result<()> {
                 },
             )
             .await?;
-            let sc = created.game.scenario().await;
+            let w = created.game.world().await;
 
-            println!("\n{} — MCP endpoint: http://{bind}/mcp", sc.name);
+            println!("\n{} — MCP endpoint: http://{bind}/mcp", w.scenario.name);
             println!("Admin token (for /api): {}\n", created.admin_token);
             println!("Seat tokens:");
-            for s in &sc.seats {
-                let gm = if s.game_master { " [game master]" } else { "" };
+            for id in w.scenario.seat_ids() {
+                let Some(s) = w.seat(id) else { continue };
+                let side = match s.empire.and_then(|e| w.empire(e)) {
+                    Some(e) => e.name.as_str(),
+                    None => "game master",
+                };
                 println!(
-                    "  {:<12} {}  {}{gm}",
-                    s.id, created.seat_tokens[&s.id], s.name
+                    "  {:<12} {}  {} [{side}]",
+                    s.id, created.seat_tokens[s.id], s.name
                 );
             }
             println!();

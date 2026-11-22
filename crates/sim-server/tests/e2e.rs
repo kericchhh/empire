@@ -163,8 +163,8 @@ async fn two_agents_play_a_tick_over_mcp() {
             "seat_token": ct,
             "tick": 0,
             "orders": [
-                { "kind": "action", "character": "queen", "action": "decree" },
-                { "kind": "action", "character": "queen", "action": "feast" }
+                { "kind": "action", "character": "queen", "action": "issue_edict" },
+                { "kind": "action", "character": "queen", "action": "relief" }
             ]
         }),
     )
@@ -198,7 +198,7 @@ async fn two_agents_play_a_tick_over_mcp() {
     let next = ok(call(&crown, "wait_for_turn", json!({ "seat_token": ct })).await);
     assert_eq!(next["status"], "your_turn");
     assert_eq!(next["tick"], 1);
-    assert!(next.to_string().contains("Queen Ada: Decree"));
+    assert!(next.to_string().contains("Queen Ada: Issue an edict"));
 }
 
 #[tokio::test]
@@ -226,7 +226,10 @@ async fn an_intervention_changes_the_world_and_enters_the_log() {
             json!({
                 "title": "A dragon appears",
                 "text": "It sleeps on the gold",
-                "effects": [{ "target": { "metric": "gold" }, "delta": -50 }]
+                "effects": [{
+                    "target": { "metric": { "empire": "kingdom", "metric": "treasury" } },
+                    "delta": -50
+                }]
             }),
         )
         .await;
@@ -234,7 +237,10 @@ async fn an_intervention_changes_the_world_and_enters_the_log() {
     let seq = r.json::<Value>().await.unwrap()["seq"].as_i64().unwrap();
 
     let overview: Value = s.get("/overview").await.json().await.unwrap();
-    assert_eq!(overview["state"]["metrics"]["gold"], 50.0);
+    assert_eq!(
+        overview["state"]["empires"]["kingdom"]["metrics"]["treasury"],
+        50.0
+    );
     assert!(
         overview["chronicle"]
             .to_string()
@@ -257,11 +263,40 @@ async fn invalid_interventions_are_rejected_with_a_reason() {
     let r = s
         .post(
             "/intervene",
-            json!({ "title": "Mana storm", "effects": [{ "target": { "metric": "mana" }, "delta": 1 }] }),
+            json!({ "title": "Mana storm", "effects": [{
+                "target": { "metric": { "empire": "kingdom", "metric": "mana" } },
+                "delta": 1
+            }] }),
         )
         .await;
     assert_eq!(r.status(), 422);
     assert!(r.text().await.unwrap().contains("unknown target"));
+    let r = s
+        .post(
+            "/intervene",
+            json!({ "title": "A storm", "empire": "atlantis" }),
+        )
+        .await;
+    assert_eq!(r.status(), 422);
+    assert!(r.text().await.unwrap().contains("unknown empire"));
+}
+
+#[tokio::test]
+async fn an_intervention_can_be_announced_to_one_empire() {
+    let s = Server::start().await;
+    let r = s
+        .post(
+            "/intervene",
+            json!({ "title": "A storm wrecks the fleet", "empire": "isles" }),
+        )
+        .await;
+    assert_eq!(r.status(), 200);
+    let pirates = s.mcp().await;
+    let crown = s.mcp().await;
+    let p = ok(call(&pirates, "look", json!({ "seat_token": s.tok("pirates") })).await);
+    let c = ok(call(&crown, "look", json!({ "seat_token": s.tok("crown") })).await);
+    assert!(p.to_string().contains("A storm wrecks the fleet"));
+    assert!(!c.to_string().contains("A storm wrecks the fleet"));
 }
 
 #[tokio::test]
@@ -340,7 +375,10 @@ async fn the_game_master_rules_on_a_secret_plan_over_mcp() {
         json!({ "seat_token": gt, "tick": 1, "rulings": [{
             "pending_id": pending,
             "outcome": "The duke falls ill",
-            "effects": [{ "target": { "metric": "order" }, "delta": -0.1 }]
+            "effects": [{
+                "target": { "metric": { "empire": "kingdom", "metric": "stability" } },
+                "delta": -0.1
+            }]
         }]}),
     )
     .await);

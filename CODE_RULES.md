@@ -28,8 +28,8 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 ## Scenario-agnostic code
 
-- Rust and TS code refers to roles, metrics, resources and regions by ids taken from the scenario. Setting-specific names and lore belong in `scenarios/`.
-- A new mechanic is either a generic Rust rule configured by the scenario or a Rhai script the scenario ships with. Rhai runs sandboxed, with operation and memory limits.
+- Rust and TS code refers to offices, metrics, resources and regions by ids taken from the ruleset and the scenario. Setting-specific names and lore belong in `scenarios/`.
+- A new mechanic is a generic rule, action or office in `crates/sim-core/rules/standard.yaml`, or new engine code when the rule format cannot express it. Scenarios never carry mechanics.
 
 ## Rust style
 

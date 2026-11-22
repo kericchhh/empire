@@ -5,16 +5,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::{Effect, Event, EventKind, Target};
 use crate::ids::*;
-use crate::scenario::Scenario;
+use crate::world::World;
 
 /// The world at one moment. Built only by `State::new` followed by `apply` for each event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct State {
     pub tick: Tick,
     pub seed: u64,
-    pub ended: Option<Ending>,
-    pub metrics: BTreeMap<MetricId, f64>,
-    pub regions: BTreeMap<RegionId, BTreeMap<StatId, f64>>,
+    pub empires: BTreeMap<EmpireId, EmpireState>,
+    pub regions: BTreeMap<RegionId, RegionState>,
     pub characters: BTreeMap<CharacterId, CharacterState>,
     pub joined: BTreeSet<SeatId>,
     /// Free-form actions awaiting a game-master ruling.
@@ -26,13 +25,21 @@ pub struct State {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct Ending {
-    pub ending: EndingId,
-    pub label: String,
+pub struct EmpireState {
+    pub metrics: BTreeMap<MetricId, f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RegionState {
+    pub owner: EmpireId,
+    pub stats: BTreeMap<StatId, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CharacterState {
+    pub empire: EmpireId,
+    pub office: OfficeId,
+    pub region: RegionId,
     pub resources: BTreeMap<ResourceId, f64>,
     pub notes: Vec<String>,
 }
@@ -60,42 +67,56 @@ fn clamp((min, max): Range, v: f64) -> f64 {
 }
 
 impl State {
-    pub fn new(sc: &Scenario) -> Self {
-        let metrics = sc
-            .metrics
+    /// The world before its first event: every number at the ruleset's `initial`, until
+    /// `WorldGenerated` sets the starting values.
+    pub fn new(w: &World) -> Self {
+        let rules = &w.rules;
+        let empires = w
+            .scenario
+            .empires
             .iter()
-            .map(|m| (m.id.clone(), m.clamp(m.initial)))
-            .collect();
-        let regions = sc
-            .regions
-            .iter()
-            .map(|r| {
-                let stats = sc
-                    .region_stats
+            .map(|e| {
+                let metrics = rules
+                    .metrics
                     .iter()
-                    .map(|s| {
-                        let v = r.stats.get(&s.id).copied().unwrap_or(s.initial);
-                        (s.id.clone(), s.clamp(v))
-                    })
+                    .map(|m| (m.id.clone(), m.clamp(m.initial)))
                     .collect();
-                (r.id.clone(), stats)
+                (e.id.clone(), EmpireState { metrics })
             })
             .collect();
-        let characters = sc
-            .characters
-            .iter()
-            .map(|c| {
-                let resources = sc
+        let regions = w
+            .scenario
+            .regions()
+            .map(|(e, r)| {
+                let stats = rules
+                    .region_stats
+                    .iter()
+                    .map(|s| (s.id.clone(), s.clamp(s.initial)))
+                    .collect();
+                (
+                    r.id.clone(),
+                    RegionState {
+                        owner: e.id.clone(),
+                        stats,
+                    },
+                )
+            })
+            .collect();
+        let characters = w
+            .scenario
+            .characters()
+            .map(|(e, c)| {
+                let resources = rules
                     .resources
                     .iter()
-                    .map(|s| {
-                        let v = c.resources.get(&s.id).copied().unwrap_or(s.initial);
-                        (s.id.clone(), s.clamp(v))
-                    })
+                    .map(|s| (s.id.clone(), s.clamp(s.initial)))
                     .collect();
                 (
                     c.id.clone(),
                     CharacterState {
+                        empire: e.id.clone(),
+                        office: c.office.clone(),
+                        region: c.region.clone(),
                         resources,
                         notes: Vec::new(),
                     },
@@ -103,28 +124,27 @@ impl State {
             })
             .collect();
         let bounds = Bounds {
-            metrics: sc
+            metrics: rules
                 .metrics
                 .iter()
                 .map(|m| (m.id.clone(), (m.min, m.max)))
                 .collect(),
-            stats: sc
+            stats: rules
                 .region_stats
                 .iter()
                 .map(|m| (m.id.clone(), (m.min, m.max)))
                 .collect(),
-            resources: sc
+            resources: rules
                 .resources
                 .iter()
                 .map(|m| (m.id.clone(), (m.min, m.max)))
                 .collect(),
-            notes_kept: sc.limits.notes_kept,
+            notes_kept: rules.limits.notes_kept,
         };
         Self {
             tick: Tick(0),
             seed: 0,
-            ended: None,
-            metrics,
+            empires,
             regions,
             characters,
             joined: BTreeSet::new(),
@@ -136,8 +156,8 @@ impl State {
     }
 
     /// Rebuild state from a full event log.
-    pub fn replay<'a>(sc: &Scenario, events: impl IntoIterator<Item = &'a Event>) -> Self {
-        let mut s = Self::new(sc);
+    pub fn replay<'a>(w: &World, events: impl IntoIterator<Item = &'a Event>) -> Self {
+        let mut s = Self::new(w);
         for e in events {
             s.apply(e);
         }
@@ -145,18 +165,67 @@ impl State {
     }
 
     pub fn value(&self, t: &Target) -> Option<f64> {
+        self.slot(t).map(|(v, _)| v)
+    }
+
+    pub fn metric(&self, empire: &EmpireId, metric: &MetricId) -> Option<f64> {
+        self.empires.get(empire)?.metrics.get(metric).copied()
+    }
+
+    pub fn stat(&self, region: &RegionId, stat: &StatId) -> Option<f64> {
+        self.regions.get(region)?.stats.get(stat).copied()
+    }
+
+    /// Regions `empire` owns, in id order.
+    pub fn regions_of<'a>(&'a self, empire: &'a EmpireId) -> impl Iterator<Item = &'a RegionId> {
+        self.regions
+            .iter()
+            .filter(move |(_, r)| &r.owner == empire)
+            .map(|(id, _)| id)
+    }
+
+    fn slot(&self, t: &Target) -> Option<(f64, Range)> {
+        let none = (None, None);
         match t {
-            Target::Metric(m) => self.metrics.get(m).copied(),
-            Target::Stat { region, stat } => self.regions.get(region)?.get(stat).copied(),
+            Target::Metric { empire, metric } => Some((
+                self.metric(empire, metric)?,
+                self.bounds.metrics.get(metric).copied().unwrap_or(none),
+            )),
+            Target::Stat { region, stat } => Some((
+                self.stat(region, stat)?,
+                self.bounds.stats.get(stat).copied().unwrap_or(none),
+            )),
             Target::Resource {
                 character,
                 resource,
-            } => self
-                .characters
-                .get(character)?
-                .resources
-                .get(resource)
-                .copied(),
+            } => Some((
+                *self.characters.get(character)?.resources.get(resource)?,
+                self.bounds.resources.get(resource).copied().unwrap_or(none),
+            )),
+        }
+    }
+
+    fn slot_mut(&mut self, t: &Target) -> Option<(&mut f64, Range)> {
+        let none = (None, None);
+        match t {
+            Target::Metric { empire, metric } => Some((
+                self.empires.get_mut(empire)?.metrics.get_mut(metric)?,
+                self.bounds.metrics.get(metric).copied().unwrap_or(none),
+            )),
+            Target::Stat { region, stat } => Some((
+                self.regions.get_mut(region)?.stats.get_mut(stat)?,
+                self.bounds.stats.get(stat).copied().unwrap_or(none),
+            )),
+            Target::Resource {
+                character,
+                resource,
+            } => Some((
+                self.characters
+                    .get_mut(character)?
+                    .resources
+                    .get_mut(resource)?,
+                self.bounds.resources.get(resource).copied().unwrap_or(none),
+            )),
         }
     }
 
@@ -164,6 +233,16 @@ impl State {
     pub fn apply(&mut self, e: &Event) {
         match &e.kind {
             EventKind::WorldStarted { seed } => self.seed = *seed,
+            EventKind::WorldGenerated { values } => {
+                for v in values {
+                    if let Some((slot, range)) = self.slot_mut(&v.target) {
+                        let next = clamp(range, v.value);
+                        if next.is_finite() {
+                            *slot = next;
+                        }
+                    }
+                }
+            }
             EventKind::SeatJoined { seat } => {
                 self.joined.insert(seat.clone());
             }
@@ -205,36 +284,14 @@ impl State {
                 }
             }
             EventKind::TickEnded { streaks } => self.streaks = streaks.clone(),
-            EventKind::WorldEnded { ending, label } => {
-                self.ended = Some(Ending {
-                    ending: ending.clone(),
-                    label: label.clone(),
-                });
-            }
         }
         self.recent.push(e.clone());
     }
 
     fn apply_effects(&mut self, effects: &[Effect]) {
         for Effect { target, delta, .. } in effects {
-            let (slot, range) = match target {
-                Target::Metric(m) => (self.metrics.get_mut(m), self.bounds.metrics.get(m)),
-                Target::Stat { region, stat } => (
-                    self.regions.get_mut(region).and_then(|r| r.get_mut(stat)),
-                    self.bounds.stats.get(stat),
-                ),
-                Target::Resource {
-                    character,
-                    resource,
-                } => (
-                    self.characters
-                        .get_mut(character)
-                        .and_then(|c| c.resources.get_mut(resource)),
-                    self.bounds.resources.get(resource),
-                ),
-            };
-            if let Some(v) = slot {
-                let next = clamp(range.copied().unwrap_or((None, None)), *v + delta);
+            if let Some((v, range)) = self.slot_mut(target) {
+                let next = clamp(range, *v + delta);
                 if next.is_finite() {
                     *v = next;
                 }

@@ -5,17 +5,19 @@ use rand_chacha::ChaCha8Rng;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::event::{Cause, Effect, Event, EventKind, Target, Visibility};
+use crate::event::{Cause, Effect, Event, EventKind, StartingValue, Target, Visibility};
 use crate::ids::*;
-use crate::scenario::{
-    ActionDef, EffectDef, EffectTarget, RuleScope, Scenario, TargetKind, ValueRef,
+use crate::perceive::knows;
+use crate::ruleset::{
+    ActionDef, EffectDef, EffectTarget, RuleScope, StatDef, TargetKind, ValueRef,
 };
 use crate::state::State;
+use crate::world::{SeatRef, World};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Order {
-    /// Take one of the character's listed actions.
+    /// Take one of the actions the character's office allows.
     Action {
         character: CharacterId,
         action: ActionId,
@@ -44,7 +46,8 @@ pub struct Ruling {
     pub outcome: String,
     #[serde(default)]
     pub effects: Vec<Effect>,
-    /// Announce the outcome to every seat. Otherwise only the author's seat learns it.
+    /// Announce the outcome to every seat of the author's empire. Otherwise only the
+    /// author's seat learns it.
     #[serde(default)]
     pub public: bool,
 }
@@ -69,8 +72,10 @@ pub enum Rejection {
     NotYourCharacter(CharacterId),
     #[error("unknown character `{0}`")]
     UnknownCharacter(CharacterId),
-    #[error("role `{role}` cannot take action `{action}`")]
-    ActionNotAllowed { role: RoleId, action: ActionId },
+    #[error("unknown empire `{0}`")]
+    UnknownEmpire(EmpireId),
+    #[error("the office `{office}` cannot take action `{action}`")]
+    ActionNotAllowed { office: OfficeId, action: ActionId },
     #[error("action `{0}` needs a target")]
     MissingTarget(ActionId),
     #[error("action `{action}` takes no target, got `{target}`")]
@@ -101,15 +106,90 @@ pub enum Rejection {
     DeltaTooLarge { max: f64 },
     #[error("unknown target {0:?}")]
     UnknownTarget(Target),
-    #[error("the world has ended")]
-    WorldEnded,
 }
 
-pub fn start(_sc: &Scenario, seed: u64) -> Vec<Event> {
+/// The first events of a world: its seed, then every starting number. A number the scenario
+/// sets is taken as given; any other is drawn from the ruleset's `start_range` with the seed.
+pub fn start(w: &World, seed: u64) -> Vec<Event> {
     vec![
         system(Tick(0), EventKind::WorldStarted { seed }),
+        system(
+            Tick(0),
+            EventKind::WorldGenerated {
+                values: starting_values(w, seed),
+            },
+        ),
         system(Tick(0), EventKind::TickStarted),
     ]
+}
+
+fn starting_values(w: &World, seed: u64) -> Vec<StartingValue> {
+    fn pick<Id: std::fmt::Display>(
+        d: &StatDef<Id>,
+        given: Option<&f64>,
+        seed: u64,
+        stream: String,
+    ) -> f64 {
+        match (given, d.start_range) {
+            (Some(v), _) => *v,
+            (None, Some([lo, hi])) => {
+                let v = lo + (hi - lo) * roll(seed, Tick(0), &stream);
+                (v * 100.0).round() / 100.0
+            }
+            (None, None) => d.initial,
+        }
+    }
+    let rules = &w.rules;
+    let mut out = Vec::new();
+    for e in &w.scenario.empires {
+        for m in &rules.metrics {
+            out.push(StartingValue {
+                target: Target::Metric {
+                    empire: e.id.clone(),
+                    metric: m.id.clone(),
+                },
+                value: pick(
+                    m,
+                    e.start.get(&m.id),
+                    seed,
+                    format!("start-metric:{}#{}", m.id, e.id),
+                ),
+            });
+        }
+    }
+    for (_, r) in w.scenario.regions() {
+        for s in &rules.region_stats {
+            out.push(StartingValue {
+                target: Target::Stat {
+                    region: r.id.clone(),
+                    stat: s.id.clone(),
+                },
+                value: pick(
+                    s,
+                    r.start.get(&s.id),
+                    seed,
+                    format!("start-stat:{}@{}", s.id, r.id),
+                ),
+            });
+        }
+    }
+    for (_, c) in w.scenario.characters() {
+        for res in &rules.resources {
+            out.push(StartingValue {
+                target: Target::Resource {
+                    character: c.id.clone(),
+                    resource: res.id.clone(),
+                },
+                value: pick(
+                    res,
+                    c.start.get(&res.id),
+                    seed,
+                    format!("start-resource:{}@{}", res.id, c.id),
+                ),
+            });
+        }
+    }
+    out
 }
 
 fn system(tick: Tick, kind: EventKind) -> Event {
@@ -121,9 +201,8 @@ fn system(tick: Tick, kind: EventKind) -> Event {
     }
 }
 
-pub fn join(sc: &Scenario, state: &State, seat: &SeatId) -> Result<Option<Event>, Rejection> {
-    sc.seat(seat)
-        .ok_or_else(|| Rejection::UnknownSeat(seat.clone()))?;
+pub fn join(w: &World, state: &State, seat: &SeatId) -> Result<Option<Event>, Rejection> {
+    seat_ref(w, seat)?;
     if state.joined.contains(seat) {
         return Ok(None);
     }
@@ -135,12 +214,18 @@ pub fn join(sc: &Scenario, state: &State, seat: &SeatId) -> Result<Option<Event>
     }))
 }
 
+fn seat_ref<'a>(w: &'a World, seat: &SeatId) -> Result<SeatRef<'a>, Rejection> {
+    w.seat(seat)
+        .ok_or_else(|| Rejection::UnknownSeat(seat.clone()))
+}
+
 /// Agent text is shown to other seats inside « », so it must not be able to close the quote
 /// or start a line that looks like a chronicle entry.
-fn check_text(sc: &Scenario, text: &str) -> Result<(), Rejection> {
+fn check_text(w: &World, text: &str) -> Result<(), Rejection> {
+    let max = w.rules.limits.text_chars;
     let n = text.chars().count();
-    if n == 0 || n > sc.limits.text_chars || text.trim().is_empty() {
-        return Err(Rejection::BadText(sc.limits.text_chars));
+    if n == 0 || n > max || text.trim().is_empty() {
+        return Err(Rejection::BadText(max));
     }
     if text.chars().any(|c| c.is_control() || c == '«' || c == '»') {
         return Err(Rejection::UnsafeText);
@@ -148,7 +233,8 @@ fn check_text(sc: &Scenario, text: &str) -> Result<(), Rejection> {
     Ok(())
 }
 
-fn check_chat_budget(sc: &Scenario, state: &State, seat: &SeatId) -> Result<(), Rejection> {
+fn check_chat_budget(w: &World, state: &State, seat: &SeatId) -> Result<(), Rejection> {
+    let max = w.rules.limits.chat_per_seat;
     let used = state
         .recent
         .iter()
@@ -160,75 +246,61 @@ fn check_chat_budget(sc: &Scenario, state: &State, seat: &SeatId) -> Result<(), 
             )
         })
         .count();
-    if used >= sc.limits.chat_per_seat {
-        return Err(Rejection::TooChatty(sc.limits.chat_per_seat));
+    if used >= max {
+        return Err(Rejection::TooChatty(max));
     }
     Ok(())
 }
 
-fn check_controls(sc: &Scenario, seat: &SeatId, c: &CharacterId) -> Result<(), Rejection> {
-    let def = sc
-        .seat(seat)
-        .ok_or_else(|| Rejection::UnknownSeat(seat.clone()))?;
-    if !def.controls.contains(c) {
+fn check_controls(w: &World, seat: &SeatId, c: &CharacterId) -> Result<(), Rejection> {
+    if !seat_ref(w, seat)?.controls.contains(c) {
         return Err(Rejection::NotYourCharacter(c.clone()));
     }
     Ok(())
 }
 
-fn check_open(state: &State) -> Result<(), Rejection> {
-    match state.ended {
-        Some(_) => Err(Rejection::WorldEnded),
-        None => Ok(()),
-    }
-}
-
 /// Validate an order against the current state. Resources are checked again at tick close,
 /// since earlier orders in the same tick may spend them.
 pub fn check_order(
-    sc: &Scenario,
+    w: &World,
     state: &State,
     seat: &SeatId,
     order: &Order,
 ) -> Result<(), Rejection> {
-    check_open(state)?;
-    check_controls(sc, seat, order.character())?;
+    check_controls(w, seat, order.character())?;
     match order {
-        Order::Freeform { text, .. } => check_text(sc, text),
+        Order::Freeform { text, .. } => check_text(w, text),
         Order::Action {
             character,
             action,
             target,
-        } => resolve_action(sc, state, character, action, target.as_deref()).map(|_| ()),
+        } => resolve_action(w, state, character, action, target.as_deref()).map(|_| ()),
     }
 }
 
 pub fn check_ruling(
-    sc: &Scenario,
+    w: &World,
     state: &State,
     seat: &SeatId,
     ruling: &Ruling,
 ) -> Result<(), Rejection> {
-    check_open(state)?;
-    let def = sc
-        .seat(seat)
-        .ok_or_else(|| Rejection::UnknownSeat(seat.clone()))?;
-    if !def.game_master {
+    if !seat_ref(w, seat)?.game_master {
         return Err(Rejection::NotGameMaster);
     }
     if !state.pending.contains_key(&ruling.pending_id) {
         return Err(Rejection::UnknownPending(ruling.pending_id.clone()));
     }
-    check_text(sc, &ruling.outcome)?;
-    if ruling.effects.len() > sc.limits.ruling_max_effects {
+    check_text(w, &ruling.outcome)?;
+    let limits = &w.rules.limits;
+    if ruling.effects.len() > limits.ruling_max_effects {
         return Err(Rejection::TooManyEffects {
-            max: sc.limits.ruling_max_effects,
+            max: limits.ruling_max_effects,
         });
     }
     for e in &ruling.effects {
-        if !e.delta.is_finite() || e.delta.abs() > sc.limits.ruling_max_delta {
+        if !e.delta.is_finite() || e.delta.abs() > limits.ruling_max_delta {
             return Err(Rejection::DeltaTooLarge {
-                max: sc.limits.ruling_max_delta,
+                max: limits.ruling_max_delta,
             });
         }
         check_target(state, &e.target)?;
@@ -243,23 +315,24 @@ fn check_target(state: &State, t: &Target) -> Result<(), Rejection> {
     }
 }
 
+/// A private message to a character the sender's empire knows of, in or beyond it.
 pub fn message(
-    sc: &Scenario,
+    w: &World,
     state: &State,
     seat: &SeatId,
     from: &CharacterId,
     to: &CharacterId,
     text: &str,
 ) -> Result<Event, Rejection> {
-    check_open(state)?;
-    check_controls(sc, seat, from)?;
-    check_chat_budget(sc, state, seat)?;
-    if sc.character(to).is_none() {
+    check_controls(w, seat, from)?;
+    check_chat_budget(w, state, seat)?;
+    let empire = &state.characters[from].empire;
+    if !knows(w, state, Some(empire), to) {
         return Err(Rejection::UnknownCharacter(to.clone()));
     }
-    check_text(sc, text)?;
+    check_text(w, text)?;
     let mut seats = vec![seat.clone()];
-    if let Some(s) = sc.seat_of(to)
+    if let Some(s) = w.seat_of(to)
         && s.id != *seat
     {
         seats.push(s.id.clone());
@@ -277,16 +350,15 @@ pub fn message(
 }
 
 pub fn note(
-    sc: &Scenario,
+    w: &World,
     state: &State,
     seat: &SeatId,
     character: &CharacterId,
     text: &str,
 ) -> Result<Event, Rejection> {
-    check_open(state)?;
-    check_controls(sc, seat, character)?;
-    check_chat_budget(sc, state, seat)?;
-    check_text(sc, text)?;
+    check_controls(w, seat, character)?;
+    check_chat_budget(w, state, seat)?;
+    check_text(w, text)?;
     Ok(Event {
         tick: state.tick,
         cause: Cause::Seat(seat.clone()),
@@ -301,17 +373,19 @@ pub fn note(
 /// Keeps every stored number finite: JSON has no infinity, so one would corrupt the log.
 pub const MAX_INTERVENTION_DELTA: f64 = 1e9;
 
+/// A user-made event. `audience` limits who hears of it to one empire; otherwise every
+/// seat does. Either way, observers only see the effects on numbers they can see.
 pub fn intervene(
-    sc: &Scenario,
+    w: &World,
     state: &State,
     title: &str,
     text: &str,
     effects: Vec<Effect>,
+    audience: Option<&EmpireId>,
 ) -> Result<Event, Rejection> {
-    check_open(state)?;
-    check_text(sc, title)?;
+    check_text(w, title)?;
     if !text.is_empty() {
-        check_text(sc, text)?;
+        check_text(w, text)?;
     }
     for e in &effects {
         if !e.delta.is_finite() || e.delta.abs() > MAX_INTERVENTION_DELTA {
@@ -321,10 +395,15 @@ pub fn intervene(
         }
         check_target(state, &e.target)?;
     }
+    let visibility = match audience {
+        Some(empire) if state.empires.contains_key(empire) => Visibility::Empire(empire.clone()),
+        Some(empire) => return Err(Rejection::UnknownEmpire(empire.clone())),
+        None => Visibility::Public,
+    };
     Ok(Event {
         tick: state.tick,
         cause: Cause::User,
-        visibility: Visibility::Public,
+        visibility,
         kind: EventKind::Intervention {
             title: title.to_owned(),
             text: text.to_owned(),
@@ -334,21 +413,18 @@ pub fn intervene(
 }
 
 struct Scope<'a> {
+    empire: &'a EmpireId,
     region: Option<&'a RegionId>,
     actor: Option<&'a CharacterId>,
     target_character: Option<&'a CharacterId>,
 }
 
-fn read(state: &State, scope: &Scope, v: &ValueRef) -> Option<f64> {
-    match v {
-        ValueRef::Metric(m) => state.metrics.get(m).copied(),
-        ValueRef::Stat(s) => state.regions.get(scope.region?)?.get(s).copied(),
-    }
-}
-
 fn value_target(scope: &Scope, v: &ValueRef) -> Option<Target> {
     Some(match v {
-        ValueRef::Metric(m) => Target::Metric(m.clone()),
+        ValueRef::Metric(m) => Target::Metric {
+            empire: scope.empire.clone(),
+            metric: m.clone(),
+        },
         ValueRef::Stat(s) => Target::Stat {
             region: scope.region?.clone(),
             stat: s.clone(),
@@ -356,13 +432,12 @@ fn value_target(scope: &Scope, v: &ValueRef) -> Option<Target> {
     })
 }
 
+fn read(state: &State, scope: &Scope, v: &ValueRef) -> Option<f64> {
+    state.value(&value_target(scope, v)?)
+}
+
 /// `None` when an effect needs something the scope lacks, such as a region.
-fn resolve_effects(
-    sc: &Scenario,
-    state: &State,
-    scope: &Scope,
-    defs: &[EffectDef],
-) -> Option<Vec<Effect>> {
+fn resolve_effects(state: &State, scope: &Scope, defs: &[EffectDef]) -> Option<Vec<Effect>> {
     let mut out = Vec::new();
     for d in defs {
         let (delta, scaled_by) = match &d.scale_by {
@@ -375,44 +450,34 @@ fn resolve_effects(
         if !delta.is_finite() {
             continue;
         }
+        let effect = |target| Effect {
+            target,
+            delta,
+            scaled_by: scaled_by.clone(),
+        };
         match &d.target {
-            EffectTarget::Metric(m) => out.push(Effect {
-                target: Target::Metric(m.clone()),
-                delta,
-                scaled_by: scaled_by.clone(),
-            }),
-            EffectTarget::Stat(s) => out.push(Effect {
-                target: Target::Stat {
-                    region: scope.region?.clone(),
-                    stat: s.clone(),
-                },
-                delta,
-                scaled_by: scaled_by.clone(),
-            }),
-            EffectTarget::AllRegions(s) => out.extend(sc.regions.iter().map(|r| Effect {
-                target: Target::Stat {
-                    region: r.id.clone(),
-                    stat: s.clone(),
-                },
-                delta,
-                scaled_by: scaled_by.clone(),
+            EffectTarget::Metric(m) => out.push(effect(Target::Metric {
+                empire: scope.empire.clone(),
+                metric: m.clone(),
             })),
-            EffectTarget::Resource(r) => out.push(Effect {
-                target: Target::Resource {
-                    character: scope.actor?.clone(),
-                    resource: r.clone(),
-                },
-                delta,
-                scaled_by: scaled_by.clone(),
-            }),
-            EffectTarget::TargetResource(r) => out.push(Effect {
-                target: Target::Resource {
-                    character: scope.target_character?.clone(),
-                    resource: r.clone(),
-                },
-                delta,
-                scaled_by: scaled_by.clone(),
-            }),
+            EffectTarget::Stat(s) => out.push(effect(Target::Stat {
+                region: scope.region?.clone(),
+                stat: s.clone(),
+            })),
+            EffectTarget::AllRegions(s) => out.extend(state.regions_of(scope.empire).map(|r| {
+                effect(Target::Stat {
+                    region: r.clone(),
+                    stat: s.clone(),
+                })
+            })),
+            EffectTarget::Resource(r) => out.push(effect(Target::Resource {
+                character: scope.actor?.clone(),
+                resource: r.clone(),
+            })),
+            EffectTarget::TargetResource(r) => out.push(effect(Target::Resource {
+                character: scope.target_character?.clone(),
+                resource: r.clone(),
+            })),
         }
     }
     Some(out)
@@ -420,27 +485,27 @@ fn resolve_effects(
 
 /// Effects of an action, including its cost as negative resource effects.
 fn resolve_action<'a>(
-    sc: &'a Scenario,
+    w: &'a World,
     state: &State,
     character: &CharacterId,
     action: &ActionId,
     target: Option<&str>,
 ) -> Result<(&'a ActionDef, Vec<Effect>), Rejection> {
-    let cdef = sc
-        .character(character)
+    let cs = state
+        .characters
+        .get(character)
         .ok_or_else(|| Rejection::UnknownCharacter(character.clone()))?;
-    let role = sc
-        .role(&cdef.role)
-        .ok_or_else(|| Rejection::UnknownCharacter(character.clone()))?;
-    let adef = sc
-        .action(action)
-        .filter(|_| role.actions.contains(action))
+    let adef = w
+        .rules
+        .office(&cs.office)
+        .filter(|o| o.actions.contains(action))
+        .and_then(|_| w.rules.action(action))
         .ok_or_else(|| Rejection::ActionNotAllowed {
-            role: role.id.clone(),
+            office: cs.office.clone(),
             action: action.clone(),
         })?;
 
-    let mut region = cdef.region.as_ref();
+    let mut region = Some(&cs.region);
     let mut target_character = None;
     let target_region;
     let target_char_id;
@@ -455,14 +520,18 @@ fn resolve_action<'a>(
         (_, None) => return Err(Rejection::MissingTarget(action.clone())),
         (TargetKind::Region, Some(t)) => {
             target_region = RegionId::from(t);
-            if sc.region(&target_region).is_none() {
+            if state
+                .regions
+                .get(&target_region)
+                .is_none_or(|r| r.owner != cs.empire)
+            {
                 return Err(Rejection::BadTarget(t.to_owned()));
             }
             region = Some(&target_region);
         }
         (TargetKind::Character, Some(t)) => {
             target_char_id = CharacterId::from(t);
-            if sc.character(&target_char_id).is_none() || &target_char_id == character {
+            if &target_char_id == character || !knows(w, state, Some(&cs.empire), &target_char_id) {
                 return Err(Rejection::BadTarget(t.to_owned()));
             }
             target_character = Some(&target_char_id);
@@ -470,16 +539,16 @@ fn resolve_action<'a>(
     }
 
     let scope = Scope {
+        empire: &cs.empire,
         region,
         actor: Some(character),
         target_character,
     };
-    let mut effects = resolve_effects(sc, state, &scope, &adef.effects)
+    let mut effects = resolve_effects(state, &scope, &adef.effects)
         .ok_or_else(|| Rejection::NoRegion(action.clone()))?;
 
-    let have = &state.characters[character].resources;
     for (res, need) in &adef.cost {
-        let available = have.get(res).copied().unwrap_or(0.0);
+        let available = cs.resources.get(res).copied().unwrap_or(0.0);
         if available < *need {
             return Err(Rejection::Insufficient {
                 resource: res.clone(),
@@ -501,27 +570,25 @@ fn resolve_action<'a>(
 
 /// Resolve every submission of the current tick, run the rules, and advance to the next tick.
 /// Inputs are processed grouped by seat, in submission order within a seat.
-pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Event> {
-    let mut tick = Tick(state.tick.0);
+pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> {
+    let tick = state.tick;
     let mut log = Log {
         state: state.clone(),
         events: Vec::new(),
     };
-    if state.ended.is_some() {
-        return log.events;
-    }
 
     let mut inputs: Vec<&TurnInput> = inputs.iter().collect();
     inputs.sort_by(|a, b| a.seat.cmp(&b.seat));
 
     for input in &inputs {
         if let Submission::Ruling(r) = &input.submission
-            && check_ruling(sc, &log.state, &input.seat, r).is_ok()
+            && check_ruling(w, &log.state, &input.seat, r).is_ok()
         {
+            let author = &log.state.pending[&r.pending_id].character;
             let visibility = if r.public {
-                Visibility::Public
+                Visibility::Empire(log.state.characters[author].empire.clone())
             } else {
-                author_only(sc, &log.state.pending[&r.pending_id].character)
+                author_only(w, author)
             };
             log.push(Event {
                 tick,
@@ -543,11 +610,11 @@ pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Eve
             continue;
         };
         let character = order.character();
-        if check_controls(sc, &input.seat, character).is_err() {
+        if check_controls(w, &input.seat, character).is_err() {
             continue;
         }
         let used = orders_used.entry(character).or_default();
-        if *used >= sc.limits.orders_per_character {
+        if *used >= w.rules.limits.orders_per_character {
             continue;
         }
         *used += 1;
@@ -555,14 +622,14 @@ pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Eve
         match order {
             Order::Action { action, target, .. } => {
                 acted.insert(character);
-                match resolve_action(sc, &log.state, character, action, target.as_deref()) {
+                match resolve_action(w, &log.state, character, action, target.as_deref()) {
                     Ok((adef, effects)) => log.push(Event {
                         tick,
                         cause: Cause::Seat(input.seat.clone()),
                         visibility: if adef.secret {
                             seat_only
                         } else {
-                            Visibility::Public
+                            Visibility::Empire(log.state.characters[character].empire.clone())
                         },
                         kind: EventKind::ActionResolved {
                             character: character.clone(),
@@ -584,7 +651,7 @@ pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Eve
                 }
             }
             Order::Freeform { text, .. } => {
-                if check_text(sc, text).is_ok() {
+                if check_text(w, text).is_ok() {
                     log.push(Event {
                         tick,
                         cause: Cause::Seat(input.seat.clone()),
@@ -600,26 +667,29 @@ pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Eve
         }
     }
 
-    for c in &sc.characters {
-        if acted.contains(&c.id) {
-            continue;
-        }
-        let Some(action) = sc.role(&c.role).and_then(|r| r.default_action.as_ref()) else {
-            continue;
-        };
-        if let Ok((adef, effects)) = resolve_action(sc, &log.state, &c.id, action, None) {
-            let seat = sc.seat_of(&c.id).map(|s| s.id.clone());
+    let idle: Vec<(CharacterId, ActionId, EmpireId)> = state
+        .characters
+        .iter()
+        .filter(|(c, _)| !acted.contains(c))
+        .filter_map(|(c, cs)| {
+            let action = w.rules.office(&cs.office)?.default_action.clone()?;
+            Some((c.clone(), action, cs.empire.clone()))
+        })
+        .collect();
+    for (c, action, empire) in idle {
+        if let Ok((adef, effects)) = resolve_action(w, &log.state, &c, &action, None) {
+            let seat = w.seat_of(&c).map(|s| s.id.clone());
             log.push(Event {
                 tick,
                 cause: seat.clone().map_or(Cause::System, Cause::Seat),
                 visibility: if adef.secret {
                     Visibility::Seats(seat.into_iter().collect())
                 } else {
-                    Visibility::Public
+                    Visibility::Empire(empire)
                 },
                 kind: EventKind::ActionResolved {
-                    character: c.id.clone(),
-                    action: action.clone(),
+                    character: c,
+                    action,
                     target: None,
                     effects,
                 },
@@ -638,64 +708,72 @@ pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Eve
         log.push(Event {
             tick,
             cause: Cause::System,
-            visibility: author_only(sc, &character),
+            visibility: author_only(w, &character),
             kind: EventKind::FreeformExpired { id },
         });
     }
 
     let mut streaks = BTreeMap::new();
-    for rule in &sc.rules {
-        let regions: Vec<Option<&RegionId>> = match rule.scope {
-            RuleScope::Empire => vec![None],
-            RuleScope::EachRegion => sc.regions.iter().map(|r| Some(&r.id)).collect(),
+    for rule in &w.rules.rules {
+        let places: Vec<(EmpireId, Option<RegionId>)> = match rule.scope {
+            RuleScope::EachEmpire => log
+                .state
+                .empires
+                .keys()
+                .map(|e| (e.clone(), None))
+                .collect(),
+            RuleScope::EachRegion => log
+                .state
+                .regions
+                .iter()
+                .map(|(id, r)| (r.owner.clone(), Some(id.clone())))
+                .collect(),
         };
-        for region in regions {
+        for (empire, region) in &places {
+            let key = match region {
+                Some(r) => format!("rule:{}@{}", rule.id, r),
+                None => format!("rule:{}#{}", rule.id, empire),
+            };
             let scope = Scope {
-                region,
+                empire,
+                region: region.as_ref(),
                 actor: None,
                 target_character: None,
             };
             if let Some(cond) = &rule.when {
-                let key = match region {
-                    Some(r) => format!("rule:{}@{}", rule.id, r),
-                    None => format!("rule:{}", rule.id),
-                };
                 let holds = read(&log.state, &scope, &cond.value).is_some_and(|v| cond.holds(v));
-                let streak = if holds {
-                    state.streaks.get(&key).copied().unwrap_or(0) + 1
-                } else {
-                    0
-                };
                 if !holds {
                     continue;
                 }
-                streaks.insert(key, streak);
+                let streak = state.streaks.get(&key).copied().unwrap_or(0) + 1;
+                streaks.insert(key.clone(), streak);
                 if streak < cond.for_ticks {
                     continue;
                 }
             }
-            if rule.chance < 1.0 {
-                let stream = format!("rule:{}@{}", rule.id, region.map_or("", RegionId::as_str));
-                if roll(state.seed, tick, &stream) >= rule.chance {
-                    continue;
-                }
+            if rule.chance < 1.0 && roll(state.seed, tick, &key) >= rule.chance {
+                continue;
             }
-            let Some(effects) = resolve_effects(sc, &log.state, &scope, &rule.effects) else {
+            let Some(effects) = resolve_effects(&log.state, &scope, &rule.effects) else {
                 continue;
             };
             let label = rule.label.as_ref().map(|l| {
-                let name = region
-                    .and_then(|r| sc.region(r))
+                let region_name = region
+                    .as_ref()
+                    .and_then(|r| w.region(r))
                     .map_or("", |r| r.name.as_str());
-                l.replace("{region}", name)
+                let empire_name = w.empire(empire).map_or("", |e| e.name.as_str());
+                l.replace("{region}", region_name)
+                    .replace("{empire}", empire_name)
             });
             log.push(Event {
                 tick,
                 cause: Cause::Rule(rule.id.clone()),
-                visibility: Visibility::Public,
+                visibility: Visibility::Empire(empire.clone()),
                 kind: EventKind::RuleFired {
                     rule: rule.id.clone(),
-                    region: region.cloned(),
+                    empire: empire.clone(),
+                    region: region.clone(),
                     label,
                     effects,
                 },
@@ -703,49 +781,14 @@ pub fn close_tick(sc: &Scenario, state: &State, inputs: &[TurnInput]) -> Vec<Eve
         }
     }
 
-    let mut ending = None;
-    for e in &sc.endings {
-        let key = format!("ending:{}", e.id);
-        let holds = read(
-            &log.state,
-            &Scope {
-                region: None,
-                actor: None,
-                target_character: None,
-            },
-            &e.when.value,
-        )
-        .is_some_and(|v| e.when.holds(v));
-        if !holds {
-            continue;
-        }
-        let streak = state.streaks.get(&key).copied().unwrap_or(0) + 1;
-        streaks.insert(key, streak);
-        if streak >= e.when.for_ticks && ending.is_none() {
-            ending = Some(e);
-        }
-    }
-
     log.push(system(tick, EventKind::TickEnded { streaks }));
-    match ending {
-        Some(e) => log.push(system(
-            tick,
-            EventKind::WorldEnded {
-                ending: e.id.clone(),
-                label: e.label.clone(),
-            },
-        )),
-        None => {
-            tick = tick.next();
-            log.push(system(tick, EventKind::TickStarted));
-        }
-    }
+    log.push(system(tick.next(), EventKind::TickStarted));
     log.events
 }
 
-fn author_only(sc: &Scenario, character: &CharacterId) -> Visibility {
+fn author_only(w: &World, character: &CharacterId) -> Visibility {
     Visibility::Seats(
-        sc.seat_of(character)
+        w.seat_of(character)
             .map(|s| s.id.clone())
             .into_iter()
             .collect(),
@@ -788,46 +831,104 @@ mod tests {
         events.iter().map(|e| &e.kind).collect()
     }
 
-    #[test]
-    fn action_applies_effects_and_pays_cost() {
-        let mut w = World::tiny();
-        w.close(&[act("crown", "queen", "decree", None)]);
-        assert!(approx(w.metric("order"), 0.6));
-        assert!(approx(w.resource("queen", "favor"), 1.0));
+    fn sees(s: &Sim, seat: &str, text: &str) -> bool {
+        perceive(&s.w, &s.state, &seat.into())
+            .unwrap()
+            .recent
+            .iter()
+            .any(|l| l.contains(text))
     }
 
     #[test]
-    fn region_target_changes_that_region_only() {
-        let mut w = World::tiny();
-        w.close(&[act("crown", "queen", "feast", Some("south"))]);
-        assert!(approx(w.stat("south", "unrest"), 0.4));
-        assert!(approx(w.stat("north", "unrest"), 0.2));
+    fn scenario_starting_values_are_taken_as_given() {
+        let s = Sim::tiny();
+        assert_eq!(s.metric("kingdom", "treasury"), 100.0);
+        assert_eq!(s.stat("south", "unrest"), 0.9);
+        assert_eq!(s.resource("duke", "influence"), 0.0);
+    }
+
+    #[test]
+    fn unset_starting_values_are_drawn_from_the_seed_within_range() {
+        let unrest = |seed| Sim::start(Sim::tiny().w, seed).stat("isle", "unrest");
+        for seed in 0..20 {
+            assert!((0.1..0.3).contains(&unrest(seed)), "seed {seed}");
+            assert_eq!(unrest(seed), unrest(seed));
+        }
+        assert!((0..20).any(|seed| unrest(seed) != unrest(0)));
+        let s = Sim::tiny();
+        assert_eq!(
+            s.metric("isles", "treasury"),
+            100.0,
+            "no range: the initial value"
+        );
+    }
+
+    #[test]
+    fn starting_values_live_in_the_log_so_replay_never_generates_again() {
+        let s = Sim::tiny();
+        let log = start(&s.w, 7);
+        let EventKind::WorldGenerated { values } = &log[1].kind else {
+            panic!("the second event sets the starting values");
+        };
+        assert!(values.iter().any(|v| v.target
+            == Target::Stat {
+                region: "isle".into(),
+                stat: "unrest".into()
+            }));
+        let mut edited = log.clone();
+        if let EventKind::WorldGenerated { values } = &mut edited[1].kind {
+            for v in values.iter_mut() {
+                if v.target == metric("isles", "treasury") {
+                    v.value = 42.0;
+                }
+            }
+        }
+        let replayed = State::replay(&s.w, &edited);
+        assert_eq!(
+            replayed.metric(&"isles".into(), &"treasury".into()),
+            Some(42.0)
+        );
+    }
+
+    #[test]
+    fn action_applies_effects_and_pays_cost() {
+        let mut s = Sim::tiny();
+        s.close(&[act("crown", "queen", "decree", None)]);
+        assert!(approx(s.metric("kingdom", "stability"), 0.6));
+        assert!(approx(s.resource("queen", "influence"), 1.0));
+    }
+
+    #[test]
+    fn actions_change_only_the_actors_empire() {
+        let mut s = Sim::tiny();
+        s.close(&[act("crown", "queen", "feast", Some("south"))]);
+        assert!(approx(s.stat("south", "unrest"), 0.4));
+        assert!(approx(s.stat("north", "unrest"), 0.2));
         assert!(
-            approx(w.metric("gold"), 91.0),
-            "feast -10, folk default work +1"
+            approx(s.metric("kingdom", "treasury"), 91.0),
+            "feast -10, northfolk's default work +1"
+        );
+        assert!(
+            approx(s.metric("isles", "treasury"), 101.0),
+            "only the islanders' own work"
         );
     }
 
     #[test]
     fn effects_are_clamped_to_bounds() {
-        let mut w = World::tiny();
-        w.close(&[
+        let mut s = Sim::tiny();
+        s.close(&[
             act("crown", "queen", "feast", Some("north")),
             act("crown", "queen", "feast", Some("north")),
         ]);
-        assert_eq!(w.stat("north", "unrest"), 0.0);
+        assert_eq!(s.stat("north", "unrest"), 0.0);
     }
 
     #[test]
     fn cost_is_rechecked_at_close_so_resources_cannot_be_double_spent() {
-        let mut w = World::tiny();
-        w.state
-            .characters
-            .get_mut(&"queen".into())
-            .unwrap()
-            .resources
-            .insert("favor".into(), 1.0);
-        let events = w.close(&[
+        let mut s = Sim::tiny();
+        s.set_resource("queen", "influence", 1.0);
+        let events = s.close(&[
             act("crown", "queen", "decree", None),
             act("crown", "queen", "decree", None),
         ]);
@@ -836,33 +937,28 @@ mod tests {
             .filter(|e| matches!(e.kind, EventKind::ActionRejected { .. }))
             .count();
         assert_eq!(rejected, 1);
-        assert!(approx(w.metric("order"), 0.6));
-        assert_eq!(w.resource("queen", "favor"), 0.0);
+        assert!(approx(s.metric("kingdom", "stability"), 0.6));
+        assert_eq!(s.resource("queen", "influence"), 0.0);
     }
 
     #[test]
     fn orders_beyond_the_per_character_limit_are_dropped() {
-        let mut w = World::tiny();
-        w.state
-            .characters
-            .get_mut(&"queen".into())
-            .unwrap()
-            .resources
-            .insert("favor".into(), 10.0);
-        w.close(&[
+        let mut s = Sim::tiny();
+        s.set_resource("queen", "influence", 10.0);
+        s.close(&[
             act("crown", "queen", "decree", None),
             act("crown", "queen", "decree", None),
             act("crown", "queen", "decree", None),
         ]);
-        assert!(approx(w.metric("order"), 0.7));
+        assert!(approx(s.metric("kingdom", "stability"), 0.7));
     }
 
     #[test]
     fn seats_cannot_command_characters_they_do_not_control() {
-        let mut w = World::tiny();
+        let mut s = Sim::tiny();
         let err = check_order(
-            &w.sc,
-            &w.state,
+            &s.w,
+            &s.state,
             &"rival".into(),
             &Order::Action {
                 character: "queen".into(),
@@ -871,17 +967,17 @@ mod tests {
             },
         );
         assert_eq!(err, Err(Rejection::NotYourCharacter("queen".into())));
-        w.close(&[act("rival", "queen", "decree", None)]);
-        assert!(approx(w.metric("order"), 0.5));
+        s.close(&[act("rival", "queen", "decree", None)]);
+        assert!(approx(s.metric("kingdom", "stability"), 0.5));
     }
 
     #[test]
     fn check_order_reports_why_an_action_is_invalid() {
-        let w = World::tiny();
+        let s = Sim::tiny();
         let check = |seat: &str, c: &str, a: &str, t: Option<&str>| {
             check_order(
-                &w.sc,
-                &w.state,
+                &s.w,
+                &s.state,
                 &seat.into(),
                 &Order::Action {
                     character: c.into(),
@@ -890,10 +986,13 @@ mod tests {
                 },
             )
         };
-        assert!(matches!(
+        assert_eq!(
             check("folk", "northfolk", "decree", None),
-            Err(Rejection::ActionNotAllowed { .. })
-        ));
+            Err(Rejection::ActionNotAllowed {
+                office: "cohort".into(),
+                action: "decree".into()
+            })
+        );
         assert_eq!(
             check("crown", "queen", "feast", None),
             Err(Rejection::MissingTarget("feast".into()))
@@ -911,51 +1010,97 @@ mod tests {
             Err(Rejection::UnexpectedTarget { .. })
         ));
         assert!(matches!(
-            check("rival", "duke", "decree", None),
+            check("rival", "duke", "plot", None),
             Err(Rejection::Insufficient { .. })
         ));
         assert_eq!(check("crown", "queen", "spy", Some("duke")), Ok(()));
     }
 
     #[test]
-    fn default_action_runs_only_for_characters_that_did_not_act() {
-        let mut w = World::tiny();
-        w.close(&[]);
-        assert!(approx(w.metric("gold"), 101.0));
+    fn region_actions_reach_only_the_actors_own_territory() {
+        let s = Sim::tiny();
+        assert_eq!(
+            check_order(
+                &s.w,
+                &s.state,
+                &"crown".into(),
+                &Order::Action {
+                    character: "queen".into(),
+                    action: "feast".into(),
+                    target: Some("isle".into()),
+                },
+            ),
+            Err(Rejection::BadTarget("isle".into()))
+        );
+    }
 
-        let mut w = World::tiny();
-        w.close(&[freeform("folk", "northfolk", "We sing")]);
+    #[test]
+    fn foreign_characters_are_targets_only_when_their_office_is_public() {
+        let s = Sim::tiny();
+        let spy = |target: &str| {
+            check_order(
+                &s.w,
+                &s.state,
+                &"crown".into(),
+                &Order::Action {
+                    character: "queen".into(),
+                    action: "spy".into(),
+                    target: Some(target.into()),
+                },
+            )
+        };
+        assert_eq!(
+            spy("pirate_king"),
+            Ok(()),
+            "a head of state is known abroad"
+        );
+        assert_eq!(
+            spy("islanders"),
+            Err(Rejection::BadTarget("islanders".into()))
+        );
+    }
+
+    #[test]
+    fn default_action_runs_only_for_characters_that_did_not_act() {
+        let mut s = Sim::tiny();
+        s.close(&[]);
+        assert!(approx(s.metric("kingdom", "treasury"), 101.0));
+
+        let mut s = Sim::tiny();
+        s.close(&[freeform("folk", "northfolk", "We sing")]);
         assert!(
-            approx(w.metric("gold"), 101.0),
+            approx(s.metric("kingdom", "treasury"), 101.0),
             "a free-form order is not an action"
         );
     }
 
     #[test]
+    fn actions_are_seen_inside_the_actors_empire_only() {
+        let mut s = Sim::tiny();
+        s.close(&[act("crown", "queen", "decree", None)]);
+        assert!(sees(&s, "folk", "Queen Ada: Decree"));
+        assert!(!sees(&s, "pirates", "Decree"));
+        assert!(sees(&s, "gm", "Decree"));
+    }
+
+    #[test]
     fn secret_actions_are_hidden_from_other_seats() {
-        let mut w = World::tiny();
-        w.close(&[act("crown", "queen", "spy", Some("duke"))]);
-        let spied = |seat: &str| {
-            perceive(&w.sc, &w.state, &seat.into())
-                .unwrap()
-                .recent
-                .iter()
-                .any(|l| l.contains("Spy"))
-        };
-        assert!(spied("crown"));
-        assert!(spied("gm"));
-        assert!(!spied("rival"));
-        assert!(!spied("folk"));
+        let mut s = Sim::tiny();
+        s.close(&[act("crown", "queen", "spy", Some("duke"))]);
+        assert!(sees(&s, "crown", "Spy"));
+        assert!(sees(&s, "gm", "Spy"));
+        assert!(!sees(&s, "rival", "Spy"));
+        assert!(!sees(&s, "folk", "Spy"));
     }
 
     #[test]
     fn freeform_is_ruled_by_the_game_master_on_the_next_tick() {
-        let mut w = World::tiny();
-        w.close(&[
+        let mut s = Sim::tiny();
+        s.close(&[
             freeform("crown", "queen", "I marry the duke"),
             act("crown", "queen", "feast", Some("south")),
         ]);
-        let id = w
+        let id = s
             .state
             .pending
             .keys()
@@ -968,33 +1113,38 @@ mod tests {
             outcome: "The wedding calms the realm".into(),
             public: true,
             effects: vec![Effect {
-                target: Target::Metric("order".into()),
+                target: metric("kingdom", "stability"),
                 delta: 0.3,
                 scaled_by: None,
             }],
         };
-        assert_eq!(check_ruling(&w.sc, &w.state, &"gm".into(), &r), Ok(()));
+        assert_eq!(check_ruling(&s.w, &s.state, &"gm".into(), &r), Ok(()));
         assert_eq!(
-            check_ruling(&w.sc, &w.state, &"crown".into(), &r),
+            check_ruling(&s.w, &s.state, &"crown".into(), &r),
             Err(Rejection::NotGameMaster)
         );
-        let events = w.close(&[ruling("gm", r)]);
-        assert!(w.state.pending.is_empty());
-        assert!(approx(w.metric("order"), 0.8));
+        let events = s.close(&[ruling("gm", r)]);
+        assert!(s.state.pending.is_empty());
+        assert!(approx(s.metric("kingdom", "stability"), 0.8));
         assert!(
             kinds(&events)
                 .iter()
                 .any(|k| matches!(k, EventKind::FreeformRuled { id: rid, .. } if *rid == id))
         );
+        assert!(sees(&s, "folk", "The wedding calms the realm"));
+        assert!(
+            !sees(&s, "pirates", "wedding"),
+            "a public ruling is announced in the author's empire"
+        );
     }
 
     #[test]
-    fn rulings_are_bounded_by_scenario_limits() {
-        let mut w = World::tiny();
-        w.close(&[freeform("crown", "queen", "I summon a dragon")]);
-        let id = w.state.pending.keys().next().cloned().unwrap();
+    fn rulings_are_bounded_by_ruleset_limits() {
+        let mut s = Sim::tiny();
+        s.close(&[freeform("crown", "queen", "I summon a dragon")]);
+        let id = s.state.pending.keys().next().cloned().unwrap();
         let effect = |delta| Effect {
-            target: Target::Metric("order".into()),
+            target: metric("kingdom", "stability"),
             delta,
             scaled_by: None,
         };
@@ -1006,35 +1156,35 @@ mod tests {
         };
         let gm = SeatId::from("gm");
         assert!(matches!(
-            check_ruling(&w.sc, &w.state, &gm, &r(vec![effect(0.9)])),
+            check_ruling(&s.w, &s.state, &gm, &r(vec![effect(0.9)])),
             Err(Rejection::DeltaTooLarge { .. })
         ));
         assert!(matches!(
-            check_ruling(&w.sc, &w.state, &gm, &r(vec![effect(f64::NAN)])),
+            check_ruling(&s.w, &s.state, &gm, &r(vec![effect(f64::NAN)])),
             Err(Rejection::DeltaTooLarge { .. })
         ));
         assert!(matches!(
-            check_ruling(&w.sc, &w.state, &gm, &r(vec![effect(0.1), effect(0.1)])),
+            check_ruling(&s.w, &s.state, &gm, &r(vec![effect(0.1), effect(0.1)])),
             Err(Rejection::TooManyEffects { max: 1 })
         ));
         let bad_target = Effect {
-            target: Target::Metric("mana".into()),
+            target: metric("kingdom", "mana"),
             delta: 0.1,
             scaled_by: None,
         };
         assert!(matches!(
-            check_ruling(&w.sc, &w.state, &gm, &r(vec![bad_target])),
+            check_ruling(&s.w, &s.state, &gm, &r(vec![bad_target])),
             Err(Rejection::UnknownTarget(_))
         ));
     }
 
     #[test]
     fn unruled_freeform_expires_after_one_tick() {
-        let mut w = World::tiny();
-        w.close(&[freeform("crown", "queen", "I pray")]);
-        assert_eq!(w.state.pending.len(), 1);
-        let events = w.close(&[]);
-        assert!(w.state.pending.is_empty());
+        let mut s = Sim::tiny();
+        s.close(&[freeform("crown", "queen", "I pray")]);
+        assert_eq!(s.state.pending.len(), 1);
+        let events = s.close(&[]);
+        assert!(s.state.pending.is_empty());
         assert!(
             kinds(&events)
                 .iter()
@@ -1044,77 +1194,74 @@ mod tests {
 
     #[test]
     fn conditional_rule_waits_for_its_streak() {
-        let mut w = World::tiny();
+        let mut s = Sim::tiny();
         let fired = |events: &[Event]| {
-            events
-                .iter()
-                .any(|e| matches!(&e.kind, EventKind::RuleFired { label: Some(l), .. } if l == "Trouble in The South"))
+            events.iter().any(|e| {
+                matches!(&e.kind, EventKind::RuleFired { label: Some(l), .. }
+                    if l == "Trouble in The South troubles The Kingdom")
+            })
         };
-        assert!(!fired(&w.close(&[])), "south unrest held for 1 tick only");
-        assert!(fired(&w.close(&[])), "held for 2 ticks");
-        assert!(approx(w.metric("order"), 0.3));
-        w.close(&[act("crown", "queen", "feast", Some("south"))]);
-        assert!(!w.state.streaks.contains_key("rule:unrest_hurts@south"));
-    }
-
-    #[test]
-    fn ending_stops_the_world() {
-        let mut w = World::tiny();
-        w.state.metrics.insert("order".into(), 0.01);
-        let events = w.close(&[]);
-        assert!(matches!(
-            events.last().map(|e| &e.kind),
-            Some(EventKind::WorldEnded { .. })
-        ));
-        assert_eq!(w.state.tick, Tick(0));
-        assert!(w.state.ended.is_some());
-        assert!(close_tick(&w.sc, &w.state, &[]).is_empty());
-        assert_eq!(
-            note(&w.sc, &w.state, &"crown".into(), &"queen".into(), "hi"),
-            Err(Rejection::WorldEnded)
+        assert!(!fired(&s.close(&[])), "south unrest held for 1 tick only");
+        assert!(fired(&s.close(&[])), "held for 2 ticks");
+        assert!(approx(s.metric("kingdom", "stability"), 0.3));
+        assert!(
+            approx(s.metric("isles", "stability"), 0.5),
+            "only the owner suffers"
         );
+        s.close(&[act("crown", "queen", "feast", Some("south"))]);
+        assert!(!s.state.streaks.contains_key("rule:unrest_hurts@south"));
     }
 
     #[test]
-    fn closing_a_tick_advances_time() {
-        let mut w = World::tiny();
-        let events = w.close(&[]);
-        assert_eq!(w.state.tick, Tick(1));
-        assert!(matches!(
-            events.last().map(|e| (&e.kind, e.tick)),
-            Some((EventKind::TickStarted, Tick(1)))
-        ));
+    fn rule_events_are_seen_in_their_empire_only() {
+        let mut s = Sim::tiny();
+        s.close(&[]);
+        s.close(&[]);
+        assert!(sees(&s, "crown", "Trouble in The South"));
+        assert!(!sees(&s, "pirates", "Trouble"));
+    }
+
+    #[test]
+    fn the_world_never_ends_on_its_own() {
+        let mut s = Sim::tiny();
+        s.set_metric("kingdom", "stability", 0.0);
+        for t in 1..=50 {
+            let events = s.close(&[]);
+            assert_eq!(s.state.tick, Tick(t));
+            assert!(matches!(
+                events.last().map(|e| &e.kind),
+                Some(EventKind::TickStarted)
+            ));
+        }
     }
 
     #[test]
     fn close_tick_is_deterministic_and_order_independent_across_seats() {
-        let w = World::new(ROME, 42);
+        let s = Sim::rome(42);
         let a = [
             act("princeps", "augustus", "raise_taxes", Some("gallia")),
-            act("senate", "piso", "oppose_princeps", None),
+            act("senate", "piso", "oppose_ruler", None),
+            act("parthia", "phraates", "issue_edict", None),
         ];
-        let b = [a[1].clone(), a[0].clone()];
+        let b = [a[2].clone(), a[1].clone(), a[0].clone()];
         assert_eq!(
-            close_tick(&w.sc, &w.state, &a),
-            close_tick(&w.sc, &w.state, &b)
+            close_tick(&s.w, &s.state, &a),
+            close_tick(&s.w, &s.state, &b)
         );
     }
 
     #[test]
     fn random_rules_depend_on_the_seed() {
         let run = |seed| {
-            let mut w = World::new(ROME, seed);
+            let mut s = Sim::rome(seed);
             let mut fired = Vec::new();
             for _ in 0..40 {
-                for e in w.close(&[]) {
+                for e in s.close(&[]) {
                     if let EventKind::RuleFired { rule, region, .. } = e.kind
                         && rule.as_str() == "raids"
                     {
-                        fired.push((w.state.tick, region));
+                        fired.push((s.state.tick, region));
                     }
-                }
-                if w.state.ended.is_some() {
-                    break;
                 }
             }
             fired
@@ -1125,39 +1272,54 @@ mod tests {
 
     #[test]
     fn messages_reach_only_sender_and_recipient() {
-        let mut w = World::tiny();
+        let mut s = Sim::tiny();
         let e = message(
-            &w.sc,
-            &w.state,
+            &s.w,
+            &s.state,
             &"crown".into(),
             &"queen".into(),
             &"duke".into(),
             "Meet me at dusk",
         )
         .unwrap();
-        w.push(e);
-        let sees = |seat: &str| {
-            perceive(&w.sc, &w.state, &seat.into())
-                .unwrap()
-                .recent
-                .iter()
-                .any(|l| l.contains("«Meet me at dusk»"))
+        s.push(e);
+        assert!(sees(&s, "crown", "«Meet me at dusk»"));
+        assert!(sees(&s, "rival", "«Meet me at dusk»"));
+        assert!(sees(&s, "gm", "«Meet me at dusk»"));
+        assert!(!sees(&s, "folk", "«Meet me at dusk»"));
+    }
+
+    #[test]
+    fn messages_cross_borders_only_to_characters_known_abroad() {
+        let mut s = Sim::tiny();
+        let send = |s: &Sim, to: &str| {
+            message(
+                &s.w,
+                &s.state,
+                &"crown".into(),
+                &"queen".into(),
+                &to.into(),
+                "Peace?",
+            )
         };
-        assert!(sees("crown"));
-        assert!(sees("rival"));
-        assert!(sees("gm"));
-        assert!(!sees("folk"));
+        assert_eq!(
+            send(&s, "islanders"),
+            Err(Rejection::UnknownCharacter("islanders".into()))
+        );
+        let e = send(&s, "pirate_king").unwrap();
+        s.push(e);
+        assert!(sees(&s, "pirates", "«Peace?»"));
     }
 
     #[test]
     fn message_text_is_bounded() {
-        let w = World::tiny();
+        let s = Sim::tiny();
         let long = "x".repeat(51);
         for text in ["", "   ", long.as_str()] {
             assert_eq!(
                 message(
-                    &w.sc,
-                    &w.state,
+                    &s.w,
+                    &s.state,
                     &"crown".into(),
                     &"queen".into(),
                     &"duke".into(),
@@ -1170,32 +1332,36 @@ mod tests {
 
     #[test]
     fn notes_keep_only_the_latest() {
-        let mut w = World::tiny();
+        let mut s = Sim::tiny();
         for text in ["one", "two", "three"] {
-            let e = note(&w.sc, &w.state, &"crown".into(), &"queen".into(), text).unwrap();
-            w.push(e);
+            let e = note(&s.w, &s.state, &"crown".into(), &"queen".into(), text).unwrap();
+            s.push(e);
         }
-        assert_eq!(w.state.characters[&"queen".into()].notes, ["two", "three"]);
+        assert_eq!(s.state.characters[&"queen".into()].notes, ["two", "three"]);
     }
 
     #[test]
     fn join_is_idempotent_and_rejects_unknown_seats() {
-        let mut w = World::tiny();
-        let e = join(&w.sc, &w.state, &"crown".into()).unwrap().unwrap();
-        w.push(e);
-        assert_eq!(join(&w.sc, &w.state, &"crown".into()), Ok(None));
+        let mut s = Sim::tiny();
+        let e = join(&s.w, &s.state, &"crown".into()).unwrap().unwrap();
+        s.push(e);
+        assert_eq!(join(&s.w, &s.state, &"crown".into()), Ok(None));
         assert_eq!(
-            join(&w.sc, &w.state, &"nobody".into()),
+            join(&s.w, &s.state, &"gm".into()).map(|e| e.is_some()),
+            Ok(true)
+        );
+        assert_eq!(
+            join(&s.w, &s.state, &"nobody".into()),
             Err(Rejection::UnknownSeat("nobody".into()))
         );
     }
 
     #[test]
     fn interventions_change_the_world_and_validate_targets() {
-        let mut w = World::tiny();
+        let mut s = Sim::tiny();
         let e = intervene(
-            &w.sc,
-            &w.state,
+            &s.w,
+            &s.state,
             "A comet",
             "Omens everywhere",
             vec![Effect {
@@ -1206,61 +1372,71 @@ mod tests {
                 delta: 0.5,
                 scaled_by: None,
             }],
+            None,
         )
         .unwrap();
-        w.push(e);
-        assert!(approx(w.stat("north", "unrest"), 0.7));
+        s.push(e);
+        assert!(approx(s.stat("north", "unrest"), 0.7));
+        assert!(sees(&s, "pirates", "A comet"));
         let bad = intervene(
-            &w.sc,
-            &w.state,
+            &s.w,
+            &s.state,
             "Bad",
             "",
             vec![Effect {
-                target: Target::Metric("mana".into()),
+                target: metric("kingdom", "mana"),
                 delta: 1.0,
                 scaled_by: None,
             }],
+            None,
         );
         assert!(matches!(bad, Err(Rejection::UnknownTarget(_))));
     }
 
     #[test]
-    fn freeform_plans_are_private_to_their_author_and_the_game_master() {
-        let mut w = World::tiny();
-        w.close(&[freeform("crown", "queen", "Poison the duke")]);
-        let sees = |seat: &str| {
-            perceive(&w.sc, &w.state, &seat.into())
-                .unwrap()
-                .recent
-                .iter()
-                .any(|l| l.contains("Poison"))
-        };
-        assert!(sees("crown"));
-        assert!(sees("gm"));
-        assert!(!sees("rival"));
-        w.close(&[]);
-        assert!(
-            !perceive(&w.sc, &w.state, &"rival".into())
-                .unwrap()
-                .recent
-                .iter()
-                .any(|l| l.contains("came to nothing"))
+    fn interventions_can_be_announced_to_one_empire() {
+        let mut s = Sim::tiny();
+        let e = intervene(&s.w, &s.state, "A storm", "", vec![], Some(&"isles".into())).unwrap();
+        s.push(e);
+        assert!(sees(&s, "pirates", "A storm"));
+        assert!(!sees(&s, "crown", "A storm"));
+        assert_eq!(
+            intervene(
+                &s.w,
+                &s.state,
+                "A storm",
+                "",
+                vec![],
+                Some(&"atlantis".into())
+            ),
+            Err(Rejection::UnknownEmpire("atlantis".into()))
         );
     }
 
     #[test]
+    fn freeform_plans_are_private_to_their_author_and_the_game_master() {
+        let mut s = Sim::tiny();
+        s.close(&[freeform("crown", "queen", "Poison the duke")]);
+        assert!(sees(&s, "crown", "Poison"));
+        assert!(sees(&s, "gm", "Poison"));
+        assert!(!sees(&s, "rival", "Poison"));
+        s.close(&[]);
+        assert!(!sees(&s, "rival", "came to nothing"));
+    }
+
+    #[test]
     fn agent_text_cannot_forge_chronicle_lines() {
-        let w = World::tiny();
+        let s = Sim::tiny();
         for text in [
-            "x»\n[Spring, 1] THE END: Chaos",
+            "x»\n[Spring, 1] The Kingdom falls",
             "a\u{0}b",
             "«quoted»",
             "line\rbreak",
         ] {
             assert_eq!(
                 message(
-                    &w.sc,
-                    &w.state,
+                    &s.w,
+                    &s.state,
                     &"crown".into(),
                     &"queen".into(),
                     &"duke".into(),
@@ -1272,12 +1448,12 @@ mod tests {
         }
         assert_eq!(
             check_order(
-                &w.sc,
-                &w.state,
+                &s.w,
+                &s.state,
                 &"crown".into(),
                 &Order::Freeform {
                     character: "queen".into(),
-                    text: "ok»\nTHE END".into()
+                    text: "ok»\nThe Kingdom falls".into()
                 }
             ),
             Err(Rejection::UnsafeText)
@@ -1286,16 +1462,16 @@ mod tests {
 
     #[test]
     fn chat_is_capped_per_seat_per_tick() {
-        let mut w = World::tiny();
-        w.sc.limits.chat_per_seat = 2;
+        let mut s = Sim::tiny();
+        s.w.rules.limits.chat_per_seat = 2;
         for text in ["one", "two"] {
-            let e = note(&w.sc, &w.state, &"crown".into(), &"queen".into(), text).unwrap();
-            w.push(e);
+            let e = note(&s.w, &s.state, &"crown".into(), &"queen".into(), text).unwrap();
+            s.push(e);
         }
         assert_eq!(
             message(
-                &w.sc,
-                &w.state,
+                &s.w,
+                &s.state,
                 &"crown".into(),
                 &"queen".into(),
                 &"duke".into(),
@@ -1303,48 +1479,36 @@ mod tests {
             ),
             Err(Rejection::TooChatty(2))
         );
-        assert!(note(&w.sc, &w.state, &"rival".into(), &"duke".into(), "mine").is_ok());
-        w.close(&[]);
-        assert!(
-            note(
-                &w.sc,
-                &w.state,
-                &"crown".into(),
-                &"queen".into(),
-                "new tick"
-            )
-            .is_ok()
-        );
+        assert!(note(&s.w, &s.state, &"rival".into(), &"duke".into(), "mine").is_ok());
+        s.close(&[]);
+        assert!(note(&s.w, &s.state, &"crown".into(), &"queen".into(), "new tick").is_ok());
     }
 
     #[test]
     fn interventions_are_bounded_so_the_log_stays_finite() {
-        let w = World::tiny();
+        let s = Sim::tiny();
         let huge = vec![Effect {
-            target: Target::Metric("gold".into()),
+            target: metric("kingdom", "treasury"),
             delta: f64::MAX,
             scaled_by: None,
         }];
         assert!(matches!(
-            intervene(&w.sc, &w.state, "Dragon hoard", "", huge),
+            intervene(&s.w, &s.state, "Dragon hoard", "", huge, None),
             Err(Rejection::DeltaTooLarge { .. })
         ));
         assert_eq!(
-            intervene(&w.sc, &w.state, "Omen", "a»\nTHE END", vec![]),
+            intervene(&s.w, &s.state, "Omen", "a»\nThe end", vec![], None),
             Err(Rejection::UnsafeText)
         );
     }
 
     #[test]
     fn adding_a_rule_does_not_shift_other_rules_random_draws() {
-        let raids = |sc: Scenario| {
-            let mut w = World {
-                state: State::replay(&sc, &start(&sc, 9)),
-                sc,
-            };
+        let raids = |w: World| {
+            let mut s = Sim::start(w, 9);
             let mut fired = Vec::new();
             for _ in 0..30 {
-                for e in w.close(&[]) {
+                for e in s.close(&[]) {
                     if let EventKind::RuleFired { rule, region, .. } = e.kind
                         && rule.as_str() == "raids"
                     {
@@ -1354,13 +1518,13 @@ mod tests {
             }
             fired
         };
-        let base = Scenario::from_yaml(ROME).unwrap();
+        let base = Sim::rome(9).w;
         let mut extended = base.clone();
-        let mut omen = extended.rules[0].clone();
+        let mut omen = extended.rules.rules[0].clone();
         omen.id = "omens".into();
         omen.chance = 0.5;
         omen.effects.clear();
-        extended.rules.insert(0, omen);
+        extended.rules.rules.insert(0, omen);
         assert_eq!(raids(base), raids(extended));
     }
 }
