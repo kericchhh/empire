@@ -268,33 +268,20 @@ mod tests {
     }
 
     #[test]
-    fn dangling_references_are_rejected() {
-        assert!(matches!(
-            with(|s| s.empires[0].seats[0].controls.push("ghost".into())),
-            Err(DefinitionError::Unknown { .. })
-        ));
-        assert!(matches!(
-            with(|s| s.empires[0].characters[0].region = "atlantis".into()),
-            Err(DefinitionError::Unknown { .. })
-        ));
-    }
-
-    #[test]
-    fn characters_and_seats_stay_inside_their_empire() {
-        assert!(
-            matches!(
-                with(|s| s.empires[0].characters[0].region = "isle".into()),
-                Err(DefinitionError::Unknown { .. })
-            ),
-            "isle belongs to another empire"
-        );
-        assert!(
-            matches!(
-                with(|s| s.empires[0].seats[0].controls.push("pirate_king".into())),
-                Err(DefinitionError::Unknown { .. })
-            ),
-            "pirate_king belongs to another empire"
-        );
+    fn references_must_stay_inside_their_empire() {
+        let cases: [fn(&mut Scenario); 4] = [
+            |s| s.empires[0].seats[0].controls.push("ghost".into()),
+            |s| s.empires[0].characters[0].region = "atlantis".into(),
+            // `isle` and `pirate_king` belong to another empire.
+            |s| s.empires[0].characters[0].region = "isle".into(),
+            |s| s.empires[0].seats[0].controls.push("pirate_king".into()),
+        ];
+        for (i, edit) in cases.into_iter().enumerate() {
+            assert!(
+                matches!(with(edit), Err(DefinitionError::Unknown { .. })),
+                "case {i}"
+            );
+        }
     }
 
     #[test]
@@ -316,23 +303,18 @@ mod tests {
     }
 
     #[test]
-    fn a_character_belongs_to_at_most_one_seat() {
-        assert!(matches!(
-            with(|s| s.empires[0].seats[1].controls.push("queen".into())),
-            Err(DefinitionError::Invalid(_))
-        ));
-    }
-
-    #[test]
-    fn an_empire_needs_territory() {
-        assert!(matches!(
-            with(|s| s.empires[1].regions.clear()),
-            Err(DefinitionError::Invalid(_))
-        ));
-        assert!(matches!(
-            with(|s| s.empires.clear()),
-            Err(DefinitionError::Invalid(_))
-        ));
+    fn a_character_has_one_seat_and_an_empire_has_territory() {
+        let cases: [fn(&mut Scenario); 3] = [
+            |s| s.empires[0].seats[1].controls.push("queen".into()),
+            |s| s.empires[1].regions.clear(),
+            |s| s.empires.clear(),
+        ];
+        for (i, edit) in cases.into_iter().enumerate() {
+            assert!(
+                matches!(with(edit), Err(DefinitionError::Invalid(_))),
+                "case {i}"
+            );
+        }
     }
 
     #[test]

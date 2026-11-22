@@ -1,5 +1,8 @@
 //! A scenario joined to the ruleset it runs on: everything the engine reads that is not state.
 
+use std::collections::BTreeMap;
+use std::fmt;
+
 use serde::Serialize;
 
 use crate::def::{DefinitionError, invalid, unknown};
@@ -28,41 +31,21 @@ impl World {
     /// Check `scenario` against `rules`: every office and starting value it names must exist.
     pub fn new(scenario: Scenario, rules: Ruleset) -> Result<Self, DefinitionError> {
         scenario.validate()?;
-        let finite = |ctx: &str, v: f64| {
-            if v.is_finite() {
-                Ok(())
-            } else {
-                Err(invalid(format!("{ctx}: starting values must be finite")))
-            }
-        };
         for e in &scenario.empires {
             let ctx = format!("empire `{}`", e.id);
-            for (m, v) in &e.start {
-                rules
-                    .metric(m)
-                    .ok_or_else(|| unknown(&ctx, "metric", m.as_str()))?;
-                finite(&ctx, *v)?;
-            }
+            check_start(&ctx, "metric", &e.start, |m| rules.metric(m).is_some())?;
             for r in &e.regions {
                 let ctx = format!("region `{}`", r.id);
-                for (s, v) in &r.start {
-                    rules
-                        .region_stat(s)
-                        .ok_or_else(|| unknown(&ctx, "region stat", s.as_str()))?;
-                    finite(&ctx, *v)?;
-                }
+                check_start(&ctx, "region stat", &r.start, |s| {
+                    rules.region_stat(s).is_some()
+                })?;
             }
             for c in &e.characters {
                 let ctx = format!("character `{}`", c.id);
                 rules
                     .office(&c.office)
                     .ok_or_else(|| unknown(&ctx, "office", c.office.as_str()))?;
-                for (r, v) in &c.start {
-                    rules
-                        .resource(r)
-                        .ok_or_else(|| unknown(&ctx, "resource", r.as_str()))?;
-                    finite(&ctx, *v)?;
-                }
+                check_start(&ctx, "resource", &c.start, |r| rules.resource(r).is_some())?;
             }
         }
         Ok(Self { scenario, rules })
@@ -123,6 +106,24 @@ impl World {
     }
 }
 
+/// Every id in `start` must name a ruleset number of `kind`, with a finite value.
+fn check_start<Id: fmt::Display>(
+    ctx: &str,
+    kind: &'static str,
+    start: &BTreeMap<Id, f64>,
+    exists: impl Fn(&Id) -> bool,
+) -> Result<(), DefinitionError> {
+    for (id, v) in start {
+        if !exists(id) {
+            return Err(unknown(ctx, kind, &id.to_string()));
+        }
+        if !v.is_finite() {
+            return Err(invalid(format!("{ctx}: starting values must be finite")));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,38 +143,27 @@ mod tests {
 
     #[test]
     fn offices_and_starting_values_must_exist_in_the_ruleset() {
-        assert!(matches!(
-            tiny(|s| s.empires[0].characters[0].office = "pope".into()),
-            Err(DefinitionError::Unknown { kind: "office", .. })
-        ));
-        assert!(matches!(
-            tiny(|s| {
+        type Edit = fn(&mut Scenario);
+        let cases: [(&str, Edit); 4] = [
+            ("office", |s| {
+                s.empires[0].characters[0].office = "pope".into()
+            }),
+            ("metric", |s| {
                 s.empires[0].start.insert("mana".into(), 1.0);
             }),
-            Err(DefinitionError::Unknown { kind: "metric", .. })
-        ));
-        assert!(matches!(
-            tiny(|s| {
+            ("region stat", |s| {
                 s.empires[0].regions[0].start.insert("mana".into(), 1.0);
             }),
-            Err(DefinitionError::Unknown {
-                kind: "region stat",
-                ..
-            })
-        ));
-        assert!(matches!(
-            tiny(|s| {
+            ("resource", |s| {
                 s.empires[0].characters[0].start.insert("mana".into(), 1.0);
             }),
-            Err(DefinitionError::Unknown {
-                kind: "resource",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn starting_values_must_be_finite() {
+        ];
+        for (kind, edit) in cases {
+            assert!(
+                matches!(tiny(edit), Err(DefinitionError::Unknown { kind: k, .. }) if k == kind),
+                "{kind}"
+            );
+        }
         assert!(matches!(
             tiny(|s| {
                 s.empires[0].start.insert("treasury".into(), f64::INFINITY);
