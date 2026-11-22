@@ -4,7 +4,17 @@ A sandbox for simulating empires sharing one world: politics, war, economy, cult
 
 The server never calls a model. Agents connect to it, the same way a player joins a multiplayer game.
 
-## Run a world
+## The desktop app
+
+```sh
+cd app && pnpm install && pnpm tauri dev
+```
+
+Create a world by describing it or from a scenario file, and let agents play every seat. Then watch the whole world, any one empire, or exactly what any one seat's agent sees. Read the chronicle, advance a tick by hand, inject events, and copy a seat's token to connect an outside agent. Worlds are saved in the app's data directory and reopen where they stopped.
+
+On Linux the app needs WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev` on Debian and Ubuntu, `webkit2gtk-4.1` on Arch).
+
+## Run a world headless
 
 Empire runs on Linux and macOS.
 

@@ -1,8 +1,14 @@
 name: Rust setup
-description: Install the toolchain pinned by rust-toolchain.toml and restore the cargo cache.
+description: >-
+  Install the toolchain pinned by rust-toolchain.toml, the system libraries the Tauri app links
+  against, and restore the cargo cache.
 runs:
   using: composite
   steps:
+    # Tauri's Linux prerequisites (tauri.app/start/prerequisites), less the tray and bundler ones.
+    - name: Install system libraries
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq libwebkit2gtk-4.1-dev librsvg2-dev
     # Install before rust-cache: the cache key includes the rustc version.
     - name: Install toolchain
       shell: bash

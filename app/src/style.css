@@ -1,0 +1,230 @@
+/* Departure Mono is a pixel font: it renders crisp at multiples of 11px. */
+@font-face {
+  font-family: "Departure Mono";
+  src: url("./fonts/DepartureMono-Regular.woff2") format("woff2");
+  font-display: block;
+}
+
+:root {
+  --paper: #241b12;
+  --well: rgba(0, 0, 0, 0.35);
+  --raise: rgba(226, 184, 74, 0.1);
+  --line: rgba(226, 184, 74, 0.2);
+  --line-hi: rgba(226, 184, 74, 0.45);
+  --ink: #f2e7c9;
+  --dim: #b8a47e;
+  --gold: #e2b84a;
+  --gold-hi: #f3d06c;
+  --on-gold: #1b140b;
+  --bad: #ec7a5c;
+  --font: "Departure Mono", ui-monospace, monospace;
+  --read: "JetBrains Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { user-select: none; -webkit-user-select: none; cursor: default; }
+input, textarea { user-select: text; -webkit-user-select: text; }
+body {
+  margin: 0; height: 100vh; overflow: hidden; color: var(--ink);
+  font: 11px/22px var(--font); -webkit-font-smoothing: none;
+}
+/* A veil keeps full-screen papyrus calm behind tables of numbers. The world's scroller carries its
+   own copy, scrolling with it, so it is opaque and the compositor scrolls it without repainting. */
+body, .app > main { background: linear-gradient(rgba(22, 16, 10, 0.6), rgba(22, 16, 10, 0.6)), var(--paper) url("./paper.webp"); }
+.app > main { background-attachment: local; }
+::selection { background: var(--gold); color: var(--on-gold); }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: var(--line-hi); }
+::-webkit-scrollbar-track { background: transparent; }
+
+h1, h2, h3 { margin: 0; font-weight: 400; font-size: 11px; }
+p { margin: 0 0 11px; }
+/* The pixel face is for chrome and numbers; running text gets a monospace that stays readable in bulk. */
+p, li, td, code { font: 13px/22px var(--read); -webkit-font-smoothing: auto; }
+ul { margin: 0 0 11px; padding-left: 22px; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 11px 0; width: 100%; }
+code { color: var(--gold); background: var(--well); border: 1px solid var(--line); padding: 0 6px; word-break: break-all; }
+sup { color: var(--gold); font-size: 11px; line-height: 0; vertical-align: 4px; margin-right: 1px; }
+.muted { color: var(--dim); }
+
+/* Controls */
+button {
+  font: 11px/22px var(--font); color: var(--gold); text-transform: lowercase; background: linear-gradient(rgba(226, 184, 74, 0.16), rgba(226, 184, 74, 0.04));
+  border: 1px solid var(--line-hi); border-radius: 0; padding: 4px 10px; cursor: default;
+}
+button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold-hi); background: rgba(226, 184, 74, 0.2); }
+button:active:not(:disabled) { background: var(--well); }
+button:disabled { color: var(--dim); border-color: var(--line); background: transparent; }
+.go:not(:disabled), .seg .on { color: var(--on-gold); background: linear-gradient(var(--gold-hi), var(--gold)); border-color: var(--gold); }
+.go::before { content: "[ "; }
+.go::after { content: " ]"; }
+.go:hover:not(:disabled) { color: var(--on-gold); background: var(--gold-hi); }
+.go:disabled { border-style: dashed; border-color: var(--line-hi); }
+/* Buttons that should not look like buttons: a link, the error banner, the provider strip. */
+.link, .error, .strip { border: 0; padding: 0; background: none; text-transform: none; text-align: left; }
+.link:hover:not(:disabled), .error:hover:not(:disabled), .strip:hover:not(:disabled) { background: none; }
+.link { font: inherit; color: var(--gold); text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 1px solid var(--gold); outline-offset: 1px; }
+
+.box { position: relative; border: 1px solid var(--line); margin: 0 0 22px; padding: 14px 12px 3px; min-width: 0; }
+.box > legend { padding: 0 6px; margin-left: 2px; color: var(--gold); }
+.tag { color: var(--dim); text-transform: lowercase; margin-left: 4px; }
+.tag.on { color: var(--gold-hi); }
+.tag::before { content: "○ "; }
+.tag.on::before { content: "● "; }
+
+.field { display: flex; flex-direction: column; margin-bottom: 11px; min-width: 0; }
+.field > span { color: var(--dim); text-transform: lowercase; }
+input, textarea, select {
+  font: inherit; color: var(--ink); background: var(--well); border: 1px solid var(--line); box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.55);
+  border-radius: 0; padding: 5px 8px; width: 100%; caret-color: var(--gold);
+}
+input:hover:not(:disabled), textarea:hover, select:hover:not(:disabled) { border-color: var(--line-hi); }
+input:focus, textarea:focus, select:focus { border-color: var(--gold); outline: none; }
+input:disabled, select:disabled { color: var(--dim); border-style: dashed; }
+input::placeholder, textarea::placeholder { color: #806d4e; }
+input[type="number"]::-webkit-inner-spin-button { display: none; }
+textarea { resize: none; font: 13px/22px var(--read); -webkit-font-smoothing: auto; }
+select {
+  appearance: none; padding-right: 26px;
+  background: var(--well) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h10v2H8v2H6v2H4V4H2V2H0z' fill='%23e2b84a'/%3E%3C/svg%3E") no-repeat right 9px center;
+}
+.grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; } /* even, so both columns start on whole pixels */
+.seg { display: flex; margin-bottom: 11px; }
+.seg button { flex: 1; }
+.seg button + button { border-left: 0; }
+.seg button:not(.on) { color: var(--dim); background: transparent; }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.row select { flex: 1; }
+.row input { width: 8em; }
+
+.hint { color: var(--dim); }
+.busy { color: var(--gold); margin: 0; }
+.busy::after { content: ""; display: inline-block; width: 6px; height: 11px; margin-left: 6px; vertical-align: -1px; background: var(--gold); animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.error { display: block; width: 100%; font: 13px/22px var(--read); color: var(--bad); border: 1px solid var(--bad); padding: 5px 8px; margin: 0 0 11px; white-space: pre-wrap; }
+.error:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+
+/* Home: the city from above, and a papyrus scroll over it */
+.home { position: relative; height: 100vh; overflow: clip; }
+.scene { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.home::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.45) 0 25%, rgba(0, 0, 0, 0.1) 55%, rgba(0, 0, 0, 0.35)); }
+/* The roll moves only transforms, so the compositor animates it without layout or repaint: the
+   sheet is a window whose bottom edge sits at --h, over paper counter-shifted to stay put. */
+.scroll {
+  --max: calc(100vh - 92px); --roll: 620ms cubic-bezier(0.3, 0.7, 0.2, 1);
+  /* Whole pixels only: the pixel font smears into a fake bold at half-pixel positions. */
+  position: absolute; z-index: 1; left: round(down, 50% - 264px, 1px); top: round(down, 50%, 1px); width: 528px;
+  transform: translateY(round(var(--h) / -2 - 22px, 1px));
+}
+.scroll, .sheet, .paper, .roller + .sheet + .roller { transition: transform var(--roll); will-change: transform; }
+
+/* A turned wooden roller: fixed cylinder shading over grain that scrolls as it turns. */
+.roller {
+  position: absolute; z-index: 1; top: 0; left: -14px; right: -14px; height: 26px; border-radius: 13px;
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.45);
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 22%, rgba(255, 228, 170, 0.35) 38%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.6)),
+    repeating-linear-gradient(#7a4f26 0 2px, #8d5d2f 2px 3px, #6c4420 3px 5px);
+}
+.roller::before, .roller::after {
+  content: ""; position: absolute; top: -6px; width: 20px; height: 38px; border-radius: 9px;
+  background: linear-gradient(90deg, #6b4a12, #f0cf6a 35%, #c99a2e 60%, #5a3d0c);
+  box-shadow: inset 0 -6px 8px rgba(0, 0, 0, 0.45), inset 0 5px 6px rgba(255, 240, 190, 0.5);
+}
+.roller::before { left: -16px; }
+.roller::after { right: -16px; }
+.roller + .sheet + .roller { top: 10px; transform: translateY(var(--h)); }
+
+.sheet {
+  position: absolute; top: 22px; left: 0; right: 0; height: var(--max); overflow: clip; pointer-events: none;
+  transform: translateY(calc(var(--h) - var(--max)));
+}
+/* The paper darkens where it curls into the bottom roller, wherever that is. */
+.sheet::after { content: ""; position: absolute; inset: auto 0 0; height: 18px; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.55)); }
+/* The sheet: papyrus, shaded where it leaves the top roller and at its edges. */
+.paper {
+  height: var(--max); pointer-events: auto; transform: translateY(calc(var(--max) - var(--h)));
+  box-shadow: 0 0 0 1px var(--line) inset;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 18px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0) 6%, rgba(0, 0, 0, 0) 94%, rgba(0, 0, 0, 0.45)),
+    url("./paper.webp");
+}
+.sheet-inner { display: flex; flex-direction: column; max-height: var(--max); padding: 6px 0; }
+.mark { font-size: 44px; line-height: 44px; letter-spacing: 0.12em; text-align: center; text-transform: uppercase; color: var(--ink); padding: 22px 0 18px; border-bottom: 3px double var(--line-hi); margin: 0 22px; }
+.rail { position: relative; display: flex; margin: 0 22px; border-bottom: 1px solid var(--line); }
+.rail button { flex: 1; border: 0; background: transparent; padding: 6px 0; color: var(--dim); transition: color 200ms; }
+.rail button:hover:not(:disabled) { color: var(--ink); background: transparent; }
+.rail .on { color: var(--ink); }
+.rail .ink { position: absolute; left: 0; bottom: -1px; width: calc(100% / 3); height: 2px; background: var(--gold); transition: transform 360ms cubic-bezier(0.3, 0.7, 0.2, 1); }
+.panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 22px 22px 11px; }
+.pane { animation: pane-in 300ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes pane-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.panel .go { width: 100%; padding: 8px; }
+.panel .hint { margin-top: 11px; }
+.sheet-inner > .busy, .sheet-inner > .error { width: auto; margin: 0 22px 11px; }
+.strip { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 22px; margin: 0 0 6px; border-top: 1px solid var(--line); color: var(--dim); }
+.strip:hover:not(:disabled) { color: var(--ink); border-color: var(--line); }
+.dot { width: 6px; height: 6px; background: var(--dim); }
+.dot.on { background: var(--gold); }
+.dot.off { background: var(--bad); }
+.worlds { list-style: none; padding: 0; margin: 0 0 22px; }
+.worlds li { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.worlds li::before { content: "▸"; color: var(--gold); margin-right: 8px; }
+.worlds li span { flex: 1; }
+.facts { display: grid; grid-template-columns: 66px 1fr; margin: 0 0 11px; }
+.facts dt { color: var(--dim); }
+.facts dd { margin: 0; }
+.box > button { margin-bottom: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll, .sheet, .paper, .roller + .sheet + .roller, .rail .ink { transition: none; }
+  .pane, .busy::after { animation: none; }
+}
+
+/* A world: on the same papyrus, a status bar, a tree, and boxes of state */
+.loading { display: grid; place-items: center; height: 100vh; }
+.app { display: grid; grid-template: auto 1fr / 220px 1fr; height: 100vh; }
+.bar { grid-column: 1 / -1; display: flex; align-items: stretch; height: 33px; background: rgba(0, 0, 0, 0.4); border-bottom: 2px solid var(--scn, var(--line-hi)); }
+.bar > * { display: flex; align-items: center; padding: 0 12px; border-right: 1px solid var(--line); white-space: nowrap; }
+.bar h1 { color: var(--ink); text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--scn-font, var(--font)); max-width: 40%; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 31px; }
+.bar .tick { color: var(--gold); }
+.bar .wait { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 31px; color: var(--dim); }
+.bar button { border: 0; border-right: 1px solid var(--line); background: transparent; }
+.bar button:last-child { border-right: 0; }
+.app > nav { display: flex; flex-direction: column; padding: 11px 0; background: rgba(0, 0, 0, 0.25); border-right: 1px solid var(--line); overflow-y: auto; }
+.app > nav button { text-align: left; border: 0; border-left: 2px solid transparent; background: transparent; padding: 2px 12px; color: var(--ink); text-transform: none; }
+.app > nav button:hover:not(:disabled) { background: var(--raise); color: var(--ink); }
+.app > nav button.on { background: var(--raise); color: var(--gold); border-left-color: var(--gold); }
+.app > nav button.on::before { content: "▸ "; }
+.app > nav button.sub { padding-left: 28px; color: var(--dim); }
+.app > nav button.sub.on { color: var(--gold); }
+.app > main { padding: 22px 18px; overflow-y: auto; min-width: 0; }
+
+.card { display: flow-root; border: 1px solid var(--line); border-top: 0; margin: 11px 0 22px; padding: 0 12px 6px; }
+/* The title breaks the card's top edge like a legend, so the papyrus shows through behind it. */
+.card > h2 { display: flex; align-items: center; gap: 6px; margin: -11px -13px 6px; color: var(--gold); }
+.card > h2::before, .card > h2::after { content: ""; border-top: 1px solid var(--line); }
+.card > h2::before { width: 8px; }
+.card > h2::after { flex: 1; }
+.card h3 { color: var(--dim); margin: 11px 0 4px; }
+.card > label { display: flex; flex-direction: column; margin-bottom: 11px; color: var(--dim); text-transform: lowercase; }
+.card h3::before { content: "── "; color: var(--line-hi); }
+
+.numbers { display: grid; grid-template-columns: repeat(auto-fill, minmax(187px, 1fr)); gap: 0 11px; margin: 0 0 11px; }
+.numbers dt { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.numbers dd { margin: 0; font-size: 22px; line-height: 33px; color: var(--ink); }
+
+table { border-collapse: collapse; width: 100%; margin: 0 0 11px; }
+th { text-align: left; font-weight: 400; color: var(--dim); border-bottom: 1px solid var(--line); }
+th, td { padding: 0 12px 0 0; }
+td.n { color: var(--ink); font-variant-numeric: tabular-nums; }
+td button { padding: 0 8px; }
+tbody tr:hover { background: var(--raise); }
+
+.feed { list-style: none; padding: 0; }
+.feed li { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.feed li:last-child { border-bottom: 0; }
+.feed .small { margin-right: 8px; }

@@ -111,19 +111,9 @@ Also closed: a character with no region can't default to an action that affects 
 - A timed-out run is killed, but not any processes it spawned. Claude Code runs have no shell tool, so this matters only once other agent kinds arrive: kill the process group then.
 
 **Phase 3: the Tauri app in `app/`.**
-- Read the Tauri v2 docs first.
-- Host `Game` in-process and reach it through Tauri commands. The admin API is the model for those commands.
-- Use the event broadcast for live updates.
-- Build the views:
-  - hex map coloured by owner, with overlay layers;
-  - dashboards per empire;
-  - office and character views;
-  - chronicle;
-  - diplomacy graph;
-  - agent setup;
-  - interventions;
-  - a timeline scrubber built on the event log.
-- Apply the scenario theme as CSS variables.
+- Done: a Tauri 2 app (React and TypeScript with plain CSS, no UI library). `app/src-tauri` hosts one world at a time through `sim_server::host`, the same path as `sim-server run`, on a random loopback port so outside agents can still join over MCP. Commands: `list_worlds`, `open_world` (saved, scenario file, or prompt), `close_world`, `overview`, `seat_view` (the seat's real perception), `chronicle`, `intervene`, `advance_tick`. Every logged event is emitted as `world-event` and the window refreshes on it. Worlds live in the app data directory as `<name>.db`. The scenario palette and fonts become CSS variables.
+- Views today: home (new world, saved worlds), the whole world, each empire, each seat as its agent sees it, the chronicle, interventions, and seats and agents (tokens and the MCP endpoint).
+- Next, as the features behind them land: the hex map coloured by owner with overlay layers, the diplomacy graph, a timeline scrubber built on the event log, and per-seat agent settings and run logs in the app.
 
 Every phase ends with a reviewer subagent pass, as `AGENTS.md` requires.
 

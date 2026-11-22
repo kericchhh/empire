@@ -1,6 +1,6 @@
-# CI for what is built today: the Rust workspace (sim-core, sim-server), the generated
-# scenario schema and the scenario files. Rust jobs use --workspace, so adding a crate
-# needs no edit here. The Tauri app in app/ gets its jobs when it lands.
+# CI for what is built today: the Rust workspace (the sim crates and the Tauri app's backend),
+# the app's frontend, the generated scenario schema and the scenario files. Rust jobs use
+# --workspace, so adding a crate needs no edit here.
 #
 # Branch protection: require only the `ci-success` check.
 name: CI
@@ -106,6 +106,20 @@ jobs:
           persist-credentials: false
       - run: pipx run --spec check-jsonschema==0.39.0 check-jsonschema --schemafile schema/scenario.schema.json scenarios/*.yaml
 
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Type-checks with tsc, then bundles with Vite.
+      - run: npx --yes pnpm@10.33.0 install --frozen-lockfile
+      - run: npx --yes pnpm@10.33.0 build
+
   deny:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -120,7 +134,7 @@ jobs:
 
   ci-success:
     if: ${{ always() }}
-    needs: [fmt, clippy, test, doc, schema, scenarios, deny]
+    needs: [fmt, clippy, test, doc, schema, scenarios, frontend, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
