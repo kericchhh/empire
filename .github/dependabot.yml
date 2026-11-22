@@ -14,11 +14,3 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-  # Inert until web/package.json exists.
-  - package-ecosystem: npm
-    directory: /web
-    schedule:
-      interval: weekly
-    groups:
-      npm:
-        patterns: ["*"]

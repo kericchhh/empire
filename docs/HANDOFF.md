@@ -34,7 +34,7 @@ Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -
   - a schema sync test;
   - end-to-end tests in `crates/sim-server/tests/e2e.rs`, using real MCP and HTTP clients on an ephemeral port.
 - **Files added outside this session:** `.github/` (CI), `deny.toml` (it also bans provider SDK crates) and `rust-toolchain.toml`. Keep them passing.
-- **CI still assumes the old web plan.** `ci.yml` builds a `web/` folder and embeds `web/dist` in `sim-server` when `web/package.json` exists. With no `web/`, those jobs are skipped. Phase 3 has to point them at the Tauri app in `app/` and add a job that builds the app bundle. CI runs tests with `cargo nextest`, which isn't installed locally; `cargo test --workspace` covers the same tests.
+- **CI checks only what is built:** fmt, clippy, tests (`cargo nextest`), docs, schema freshness, scenario validation against the schema, and `cargo deny`. Nightly runs the proptests with 10,000 cases and an advisory check. Phase 3 adds the jobs for the Tauri app in `app/` and its bundle. `cargo nextest` isn't installed locally; `cargo test --workspace` covers the same tests.
 
 ### Decided, not built
 
