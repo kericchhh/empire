@@ -680,7 +680,10 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
                 .keys()
                 .map(|e| (e.clone(), None))
                 .collect(),
-            RuleScope::EachRegion => (log.state.regions.iter())
+            RuleScope::EachRegion => log
+                .state
+                .regions
+                .iter()
                 .map(|(id, r)| (r.owner.clone(), Some(id.clone())))
                 .collect(),
         };

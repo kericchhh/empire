@@ -117,10 +117,11 @@ async fn events(
     let page = api
         .game
         .store()
-        .events_after(q.after, q.limit.clamp(1, 5000));
-    let page = page.await.map_err(GameError::from)?.into_iter();
+        .events_after(q.after, q.limit.clamp(1, 5000))
+        .await?;
     Ok(Json(
-        page.map(|(seq, event)| LoggedEvent { seq, event })
+        page.into_iter()
+            .map(|(seq, event)| LoggedEvent { seq, event })
             .collect(),
     ))
 }

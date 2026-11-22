@@ -6,7 +6,7 @@ The state of the project at the end of the first working session (2026-11-22), f
 
 The simulation core and its MCP host are built and reviewed. The second session (2026-11-22) made scenarios setting-only and added several empires per world, the first slice of Phase 1. The third change added `sim-runner`: one Claude Code login can play every seat, each turn in a fresh isolated run. The hex map, actions between empires, Codex support in the runner and the app are still to come. `AGENTS.md` describes the target design, and its workspace table marks what is still planned.
 
-Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`. It passes with 129 tests.
+Finish line for every change: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`. It passes with 119 tests.
 
 ### Built
 
