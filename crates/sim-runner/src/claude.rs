@@ -230,13 +230,10 @@ pub(crate) async fn launch(
         .stdout(stdout)
         .stderr(stderr)
         .kill_on_drop(true);
-    // `var_os` looks names up case-insensitively on Windows, where PATH is spelled `Path`.
-    cmd.envs(
-        KEEP_ENV
-            .iter()
-            .filter_map(|k| Some((*k, std::env::var_os(k)?))),
-    );
-    cmd.envs(std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("XDG_")));
+    cmd.envs(std::env::vars_os().filter(|(k, _)| {
+        let k = k.to_string_lossy();
+        KEEP_ENV.contains(&&*k) || k.starts_with("XDG_")
+    }));
     let mut child = cmd.spawn().map_err(|source| RunError::Spawn {
         command: cfg.command.display().to_string(),
         source,
