@@ -1,15 +1,13 @@
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use sim_core::{Scenario, World};
-use sim_runner::{AgentConfig, AuthorJob, Plan, RunnerConfig};
-use sim_server::game::{Config, Game};
-use sim_server::http::{HttpConfig, router};
-use sim_server::mcp::MAX_WAIT;
-use sim_server::store::Store;
+use sim_runner::{AgentConfig, AuthorJob, RunnerConfig};
+use sim_server::game::Config;
+use sim_server::host::{Options, host};
 
 #[derive(Parser)]
 #[command(about = "Empire simulation server: agents connect to seats over MCP")]
@@ -138,34 +136,30 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(a.bind)
         .await
         .with_context(|| format!("binding {}", a.bind))?;
-    let yaml = match (&a.scenario, &a.prompt) {
+    let scenario = match (&a.scenario, &a.prompt) {
         (Some(p), _) => Some(read(p)?),
         (None, Some(request)) => Some(prompted_scenario(&a.db, request, &a.author, &runs).await?),
         (None, None) => None,
     };
-    // Check agent assignments against a new world before it is created, so a bad
-    // assignment never leaves a half-made world behind.
-    // A saved world wins over --scenario, so only a new database is checked here.
-    let fresh = yaml
-        .as_deref()
-        .filter(|_| !a.db.exists())
-        .map(|y| World::standard(Scenario::from_yaml(y)?))
-        .transpose()?;
-    if let (Some(c), Some(w)) = (agents.as_mut(), &fresh) {
-        assign(c, w)?;
-    }
-    let config = Config {
-        tick_deadline: Duration::from_secs(a.tick_seconds),
-        autoplay: a.autoplay,
-    };
-    let created = Game::open(Store::open(&a.db).await?, yaml.as_deref(), a.seed, config).await?;
-    let w = created.game.world().await;
-
-    println!(
-        "\n{} — MCP endpoint: http://{}/mcp",
-        w.scenario.name, a.bind
-    );
-    println!("Admin token (for /api): {}\n", created.admin_token);
+    let h = host(
+        listener,
+        Options {
+            db: a.db,
+            scenario,
+            seed: a.seed,
+            config: Config {
+                tick_deadline: Duration::from_secs(a.tick_seconds),
+                autoplay: a.autoplay,
+            },
+            allowed_hosts: a.allowed_hosts,
+            agents,
+            runs,
+        },
+    )
+    .await?;
+    let w = h.game.world().await;
+    println!("\n{} — MCP endpoint: {}", w.scenario.name, h.mcp_url);
+    println!("Admin token (for /api): {}\n", h.admin_token);
     println!("Seat tokens:");
     for id in w.scenario.seat_ids() {
         let Some(s) = w.seat(id) else { continue };
@@ -173,67 +167,18 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
             Some(e) => e.name.as_str(),
             None => "game master",
         };
-        let token = &created.seat_tokens[s.id];
+        let token = &h.seat_tokens[s.id];
         println!("  {:<12} {token}  {} [{side}]", s.id, s.name);
     }
-    println!();
-
-    tokio::spawn(created.game.clone().run_scheduler());
-    let app = router(
-        created.game,
-        HttpConfig {
-            admin_token: created.admin_token,
-            allowed_hosts: a.allowed_hosts,
-            max_wait: MAX_WAIT,
-        },
-    );
-    if let Some(mut config) = agents {
-        if fresh.is_none() {
-            assign(&mut config, &w)?;
-        }
-        let mut addr = listener.local_addr()?;
-        if addr.ip().is_unspecified() {
-            addr.set_ip(match addr {
-                SocketAddr::V4(_) => Ipv4Addr::LOCALHOST.into(),
-                SocketAddr::V6(_) => Ipv6Addr::LOCALHOST.into(),
-            });
-        }
-        let tokens = created.seat_tokens;
-        let plan = Plan {
-            tokens: config
-                .seats
-                .keys()
-                .filter_map(|s| Some((s.clone(), tokens.get(s)?.clone())))
-                .collect(),
-            config,
-            mcp_url: format!("http://{addr}/mcp"),
-            log_dir: runs,
-        };
-        plan.validate()?;
-        let worst = plan.worst_case_tick();
-        if worst >= Duration::from_secs(a.tick_seconds) {
-            tracing::warn!(
-                "{} seats at {} at a time with a {}s turn timeout can take {}s, not \
-                 below --tick-seconds ({}): the last seats may miss the tick",
-                plan.config.seats.len(),
-                plan.config.max_concurrent,
-                plan.config.turn_timeout_seconds,
-                worst.as_secs(),
-                a.tick_seconds,
-            );
-        }
+    if let Some(p) = &h.agents {
         println!(
-            "Agents play {} seats; run logs in {}\n",
-            plan.config.seats.len(),
-            plan.log_dir.display()
+            "\nAgents play {} seats; run logs in {}",
+            p.config.seats.len(),
+            p.log_dir.display()
         );
-        tokio::spawn(sim_runner::run(plan));
     }
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    println!();
+    tokio::signal::ctrl_c().await?;
     Ok(())
 }
 
@@ -280,23 +225,6 @@ fn summary(sc: &Scenario) -> String {
         sc.characters().count(),
         sc.seat_ids().count(),
     )
-}
-
-/// Give `all`'s agent to the world's empire seats, and refuse assignments the runner
-/// cannot play: unknown seats, and the game master's.
-fn assign(config: &mut RunnerConfig, w: &World) -> anyhow::Result<()> {
-    config.resolve(w.scenario.seats().map(|(_, s)| &s.id));
-    for id in config.seats.keys() {
-        match w.seat(id) {
-            None => anyhow::bail!("--agents names seat `{id}`, which this world does not have"),
-            Some(s) if s.game_master => anyhow::bail!(
-                "the runner cannot play the game master seat `{id}` yet: it would rule before \
-                 the other seats have acted. Connect an agent to it yourself."
-            ),
-            Some(_) => {}
-        }
-    }
-    Ok(())
 }
 
 /// Ask the author agent for a scenario and return it once the engine accepts it.
