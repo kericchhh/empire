@@ -34,6 +34,7 @@ struct Run {
     stdin: String,
     cwd: String,
     env: Vec<String>,
+    net: Vec<String>,
     start: u128,
     end: Option<u128>,
 }
@@ -93,6 +94,7 @@ fn parse(seat: &str, log: &str) -> Vec<Run> {
             "stdin" => r.stdin.push_str(&format!("{v}\n")),
             "cwd" => r.cwd = v.into(),
             "env" => r.env.push(v.into()),
+            "net" => r.net.push(v.into()),
             "start" => r.start = v.parse().unwrap(),
             "end" => r.end = Some(v.parse().unwrap()),
             _ => {}
@@ -149,6 +151,7 @@ async fn start_with_deadline(body: &str, extra: &str, deadline: Duration) -> Set
         log_dir: dir.path().join("runs"),
         claude_token: Some(LOGIN.into()),
         login_refused: Arc::default(),
+        bridge: env!("CARGO_BIN_EXE_sim-server").into(),
     };
     let login_refused = plan.login_refused.clone();
     tokio::spawn(sim_runner::run(plan));
@@ -282,6 +285,41 @@ async fn runs_are_sandboxed_with_only_the_login_and_private_logs() {
     let log = s.runs_dir().join("crown").join("tick-0.jsonl");
     let mode = std::fs::metadata(log).unwrap().permissions().mode();
     assert_eq!(mode & 0o077, 0, "{mode:o}");
+}
+
+/// Reports what a run can connect to: the world, the internet directly, and through the gate's
+/// proxy a host its provider does not need.
+const PROBE: &str = r#"python3 -c '
+import json, os, socket, sys, urllib.parse
+a = sys.argv[1:]
+world = urllib.parse.urlparse(json.loads(a[a.index("--mcp-config") + 1])["mcpServers"]["empire"]["url"])
+proxy = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
+def probe(name, host, port, send=None):
+    try:
+        s = socket.create_connection((host, port), timeout=3)
+        r = s.sendall(send) or s.recv(64).decode().split("\r\n")[0] if send else "open"
+    except OSError:
+        r = "unreachable"
+    print("net=%s %s" % (name, r))
+probe("world", world.hostname, world.port)
+probe("internet", "1.1.1.1", 443)
+probe("other-host", proxy.hostname, proxy.port, b"CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+' "$@""#;
+
+#[tokio::test]
+async fn a_run_reaches_the_world_and_its_provider_only() {
+    let s = start(PROBE, "max_concurrent: 4\n").await;
+    s.wait_for_tick(1).await;
+    let (_, r) = s.runs().into_iter().find(|(_, r)| r.end.is_some()).unwrap();
+    assert_eq!(
+        r.net,
+        [
+            "world open",
+            "internet unreachable",
+            "other-host HTTP/1.1 403 Forbidden"
+        ],
+        "{r:?}"
+    );
 }
 
 #[tokio::test]

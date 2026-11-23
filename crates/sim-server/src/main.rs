@@ -95,6 +95,7 @@ struct RunArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    sim_runner::bridge_if_asked();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -274,6 +275,7 @@ async fn write_scenario(
     let a = sim_runner::author(&AuthorJob {
         agent,
         login: &login,
+        bridge: &std::env::current_exe()?,
         request,
         log_dir,
         attempts,

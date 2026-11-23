@@ -93,6 +93,7 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
             let a = sim_runner::author(&AuthorJob {
                 agent: &agent,
                 login: &claude_token().map_err(err)?,
+                bridge: &std::env::current_exe().map_err(err)?,
                 request: text,
                 log_dir: &runs,
                 attempts: 3,
@@ -323,6 +324,7 @@ fn save_claude_token(token: String) -> Res<()> {
 }
 
 fn main() {
+    sim_runner::bridge_if_asked();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
