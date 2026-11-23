@@ -2,7 +2,7 @@
 //!
 //! Several seats of rival empires may run on the same login, so every run is sealed off from
 //! the machine and from the other seats:
-//! - an OS sandbox ([`crate::sandbox`]) with an empty home and working directory, so the run
+//! - an OS sandbox (`sandbox.rs`) with an empty home and working directory, so the run
 //!   sees none of the user's files, settings, history or git repositories;
 //! - no built-in tools (`--tools ""`), and of the MCP servers only the game's
 //!   (`--strict-mcp-config`), with only the tools of one turn: no `join` or `wait_for_turn`,

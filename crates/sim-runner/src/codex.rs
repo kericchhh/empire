@@ -7,7 +7,7 @@
 //!   calls go through code mode, whose host ships beside it and reaches only these tools;
 //! - no user config or rules (`--ignore-user-config`, `--ignore-rules`), nothing saved
 //!   (`--ephemeral`, no history), and of the MCP servers only the game's, with the turn tools;
-//! - the login is a copy of Empire's own Codex home's `auth.json` (see [`crate::local`]), carried in,
+//! - the login is a copy of Empire's own Codex home's `auth.json` (see `local.rs`), carried in,
 //!   and saved back when Codex refreshed it. A local model server needs no login at all.
 
 use std::ffi::OsString;

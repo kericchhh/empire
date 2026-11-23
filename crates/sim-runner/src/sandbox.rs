@@ -512,9 +512,12 @@ mod tests {
                 .output()
                 .unwrap()
         };
+        let out = run(&[]);
         assert!(
-            run(&[]).status.success(),
-            "a linked program finds its libraries"
+            out.status.success(),
+            "a linked program finds its libraries: {} {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
         );
         let mut tried: Vec<PathBuf> = ["/bin/sh", "/usr/bin/sh", "/usr/bin/python3"]
             .map(PathBuf::from)
