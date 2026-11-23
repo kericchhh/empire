@@ -160,6 +160,19 @@ mod platform {
         "/etc/ld.so.cache",
     ];
 
+    const TOP: [&str; 5] = ["/bin", "/sbin", "/lib", "/lib32", "/lib64"];
+
+    /// Where `path` lies once the sandbox's own links of [`TOP`] are followed: bwrap cannot
+    /// create a file behind a link to a directory that does not exist yet.
+    fn behind_links(path: &Path) -> PathBuf {
+        TOP.iter()
+            .find_map(|d| {
+                let rest = path.strip_prefix(d).ok()?;
+                Some(Path::new("/").join(std::fs::read_link(d).ok()?).join(rest))
+            })
+            .unwrap_or_else(|| path.to_owned())
+    }
+
     pub(super) type Back = Option<Arc<Carry>>;
 
     pub(super) fn take(back: &Back) -> Option<Vec<u8>> {
@@ -195,7 +208,7 @@ mod platform {
             a.extend(["--ro-bind-try".into(), p.into(), p.into()]);
         }
         // Merged-/usr systems link these into /usr; older ones keep real directories.
-        for d in ["/bin", "/sbin", "/lib", "/lib32", "/lib64"] {
+        for d in TOP {
             let d = Path::new(d);
             match std::fs::read_link(d) {
                 Ok(target) => a.extend(["--symlink".into(), target.into(), d.into()]),
@@ -222,7 +235,11 @@ mod platform {
                 .split_whitespace()
                 .filter(|w| w.starts_with('/'))
             {
-                a.extend(["--ro-bind".into(), lib.into(), lib.into()]);
+                a.extend([
+                    "--ro-bind".into(),
+                    lib.into(),
+                    behind_links(lib.as_ref()).into(),
+                ]);
             }
         }
         Ok(a)

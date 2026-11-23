@@ -305,22 +305,21 @@ async fn runs_are_sandboxed_with_only_the_login_and_private_logs() {
 
 /// Reports what a run can connect to: the world, the internet directly, and through the gate's
 /// proxy a host its provider does not need.
-const PROBE: &str = r#"python3 -c '
-import json, os, socket, sys, urllib.parse
-a = sys.argv[2:]
-world = urllib.parse.urlparse(json.loads(a[a.index("--mcp-config") + 1])["mcpServers"]["empire"]["url"])
-proxy = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
-def probe(name, host, port, send=None):
-    try:
-        s = socket.create_connection((host, port), timeout=3)
-        r = s.sendall(send) or s.recv(64).decode().split("\r\n")[0] if send else "open"
-    except OSError:
-        r = "unreachable"
-    print("net=%s %s" % (name, r))
-probe("world", world.hostname, world.port)
-probe("internet", "1.1.1.1", 443)
-probe("other-local", "127.0.0.1", int(sys.argv[1]))
-probe("other-host", proxy.hostname, proxy.port, b"CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+const PROBE: &str = r#"perl -MIO::Socket::INET -MJSON::PP -e '
+my ($other, @a) = @ARGV;
+my ($i) = grep { $a[$_] eq "--mcp-config" } 0 .. $#a;
+my ($wh, $wp) = decode_json($a[$i + 1])->{mcpServers}{empire}{url} =~ m{//([^:/]+):(\d+)};
+my ($ph, $pp) = $ENV{HTTPS_PROXY} =~ m{//([^:/]+):(\d+)};
+sub probe {
+    my ($name, $host, $port, $send) = @_;
+    my $s = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $port, Timeout => 3);
+    my $r = !$s ? "unreachable" : !defined $send ? "open" : do { print $s $send; my $l = <$s> // ""; $l =~ s/\r?\n$//; $l };
+    print "net=$name $r\n";
+}
+probe("world", $wh, $wp);
+probe("internet", "1.1.1.1", 443);
+probe("other-local", "127.0.0.1", $other);
+probe("other-host", $ph, $pp, "CONNECT example.com:443 HTTP/1.1\r\n\r\n");
 ' "$OTHER" "$@""#;
 
 #[tokio::test]
