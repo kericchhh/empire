@@ -63,11 +63,17 @@ export type Target =
   | { stat: { region: Id; stat: Id } }
   | { resource: { character: Id; resource: Id } };
 
-/** Whether Claude Code is installed, and whether Empire holds its `claude setup-token` login. */
-export interface ClaudeStatus { version: string | null; connected: boolean; sandbox_problem: string | null }
-/** Claude Code model aliases; "" leaves the choice to the CLI. */
-export const MODELS: [string, string][] = [["", "CLI default"], ["haiku", "Haiku"], ["sonnet", "Sonnet"], ["opus", "Opus"]];
-export const agent = (model: string) => (model ? `claude:${model}` : "claude");
+/** Whether an agent CLI is installed, and whether Empire holds a login for it. */
+export interface Provider { version: string | null; connected: boolean }
+export interface Providers { claude: Provider; codex: Provider; sandbox_problem: string | null }
+export type AgentKind = "claude" | "codex";
+export const AGENTS: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+/** Model choices per agent; "" leaves the choice to the CLI. */
+export const MODELS: Record<AgentKind, [string, string][]> = {
+  claude: [["", "CLI default"], ["haiku", "Haiku"], ["sonnet", "Sonnet"], ["opus", "Opus"]],
+  codex: [["", "CLI default"]],
+};
+export const agent = (kind: AgentKind, model: string) => (model ? `${kind}:${model}` : kind);
 
 export const api = {
   listWorlds: () => invoke<string[]>("list_worlds"),
@@ -79,9 +85,10 @@ export const api = {
   intervene: (title: string, text: string, effects: { target: Target; delta: number }[], empire: Id | null) =>
     invoke<number>("intervene", { title, text, effects, empire }),
   advanceTick: () => invoke<number>("advance_tick"),
-  claudeStatus: () => invoke<ClaudeStatus>("claude_status"),
+  providers: () => invoke<Providers>("providers"),
   saveClaudeToken: (token: string) => invoke<void>("save_claude_token", { token }),
-  agentsAlert: () => invoke<string | null>("agents_alert"),
+  connectCodex: () => invoke<void>("connect_codex"),
+  agentsAlerts: () => invoke<string[]>("agents_alerts"),
 };
 
 /** A ruleset or scenario name for an id, falling back to the id itself. */

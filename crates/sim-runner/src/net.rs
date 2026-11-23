@@ -4,8 +4,9 @@
 //!
 //! On Linux the run has no network at all, so a bridge inside the sandbox (Empire's own
 //! executable, see [`bridge_if_asked`]) listens on the agent's addresses and relays each
-//! connection over a Unix socket to the gate here. On macOS the sandbox profile admits only
-//! the gate's and the tunnels' loopback ports.
+//! connection over a Unix socket to the gate here. The same sockets carry a file into the
+//! run's home and back out, so the run needs no writable host directory. On macOS the sandbox
+//! profile admits only the gate's and the tunnels' loopback ports.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -20,7 +21,7 @@ use tokio::task::JoinSet;
 pub(crate) const BRIDGE_ARG: &str = "__empire-bridge";
 
 /// Where a run may connect.
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub(crate) struct Exits {
     /// `host:port` pairs the proxy admits.
     pub(crate) hosts: Vec<String>,
@@ -44,12 +45,28 @@ pub(crate) type Listener = tokio::net::UnixListener;
 #[cfg(target_os = "macos")]
 pub(crate) type Listener = tokio::net::TcpListener;
 
+/// A file carried into a run, and what the run left in its place.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+pub(crate) struct Carry {
+    pub(crate) give: Vec<u8>,
+    pub(crate) back: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
 /// What the gate does with a connection.
 #[derive(Clone)]
 pub(crate) enum Route {
     Proxy(Arc<[String]>),
     #[cfg(target_os = "linux")]
     Tunnel(SocketAddr),
+    #[cfg(target_os = "linux")]
+    Carry(Arc<Carry>),
+}
+
+impl Route {
+    pub(crate) fn proxy(exits: &Exits) -> Self {
+        Self::Proxy(exits.hosts.iter().cloned().collect())
+    }
 }
 
 /// The gate's listeners. Dropping it stops them.
@@ -68,6 +85,8 @@ impl Gate {
                         Route::Proxy(hosts) => proxy(s, hosts).await,
                         #[cfg(target_os = "linux")]
                         Route::Tunnel(to) => tunnel(s, to).await,
+                        #[cfg(target_os = "linux")]
+                        Route::Carry(c) => carry(s, &c).await,
                     }
                 });
             }
@@ -99,7 +118,7 @@ async fn proxy(mut s: impl AsyncRead + AsyncWrite + Unpin, hosts: Arc<[String]>)
     let target = match (words.next(), words.next()) {
         (Some("CONNECT"), Some(t)) if hosts.iter().any(|h| h == t) => t.to_owned(),
         (_, t) => {
-            tracing::info!(target = t.unwrap_or(""), "run's connection refused");
+            tracing::info!(to = t.unwrap_or(""), "run's connection refused");
             let _ = s
                 .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
                 .await;
@@ -128,6 +147,36 @@ async fn tunnel(mut s: impl AsyncRead + AsyncWrite + Unpin, to: SocketAddr) {
     }
 }
 
+/// `<` asks for the file; `>` hands back what the run left, which the gate acknowledges once
+/// kept, so the run cannot end before it is.
+#[cfg(target_os = "linux")]
+async fn carry(mut s: impl AsyncRead + AsyncWrite + Unpin, c: &Carry) {
+    let mut op = [0];
+    if s.read_exact(&mut op).await.is_err() {
+        return;
+    }
+    match &op {
+        b"<" => {
+            let _ = s.write_all(&c.give).await;
+        }
+        b">" => {
+            let mut back = Vec::new();
+            let limit = crate::fs::CARRY_LIMIT;
+            if (&mut s)
+                .take(limit + 1)
+                .read_to_end(&mut back)
+                .await
+                .is_ok()
+                && back.len() as u64 <= limit
+            {
+                *c.back.lock().expect("never poisoned") = Some(back);
+                let _ = s.write_all(b"k").await;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// When this process was started as a run's bridge, act as one and exit with the agent's
 /// status; otherwise return at once. Every executable that hosts a runner calls this first.
 pub fn bridge_if_asked() {
@@ -140,20 +189,29 @@ pub fn bridge_if_asked() {
     }
 }
 
-/// `<listen>=<socket>... -- <program> <args>...`: relay each listen address to its socket,
-/// then run the program.
+/// `<listen>=<socket>... [@<file>=<socket>] -- <program> <args>...`: relay each listen
+/// address to its socket, fetch the file, run the program, then hand the file back.
 fn bridge(args: Vec<OsString>) -> io::Result<i32> {
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     let split = args
         .iter()
         .position(|a| a == "--")
         .ok_or_else(|| io::Error::other("no `--` before the program"))?;
+    let (program, rest) = args[split + 1..]
+        .split_first()
+        .ok_or_else(|| io::Error::other("no program after `--`"))?;
+    let mut carried = None;
     for spec in &args[..split] {
         let spec = spec.to_string_lossy();
-        let (addr, sock) = spec
+        let (from, sock) = spec
             .split_once('=')
             .ok_or_else(|| io::Error::other(format!("bad route `{spec}`")))?;
-        let listener = std::net::TcpListener::bind(addr)?;
+        if let Some(file) = from.strip_prefix('@') {
+            carried = Some((std::path::PathBuf::from(file), sock.to_owned()));
+            continue;
+        }
+        let listener = std::net::TcpListener::bind(from)?;
         let sock = sock.to_owned();
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
@@ -163,10 +221,26 @@ fn bridge(args: Vec<OsString>) -> io::Result<i32> {
             }
         });
     }
-    let (program, rest) = args[split + 1..]
-        .split_first()
-        .ok_or_else(|| io::Error::other("no program after `--`"))?;
+    if let Some((file, sock)) = &carried {
+        let mut s = UnixStream::connect(sock)?;
+        s.write_all(b"<")?;
+        let mut given = Vec::new();
+        s.read_to_end(&mut given)?;
+        if let Some(dir) = file.parent() {
+            crate::fs::private_dir(dir)?;
+        }
+        crate::fs::private_file(file, false)?.write_all(&given)?;
+    }
     let status = std::process::Command::new(program).args(rest).status()?;
+    if let Some((file, sock)) = &carried
+        && let Some(back) = crate::fs::read_carried(file)
+    {
+        let mut s = UnixStream::connect(sock)?;
+        s.write_all(b">")?;
+        s.write_all(&back)?;
+        s.shutdown(std::net::Shutdown::Write)?;
+        s.read_exact(&mut [0])?;
+    }
     Ok(status.code().unwrap_or(1))
 }
 
@@ -187,13 +261,13 @@ fn relay(a: std::net::TcpStream, b: std::os::unix::net::UnixStream) {
 mod tests {
     use super::*;
 
-    async fn ask(hosts: &[&str], request: &str) -> String {
+    async fn ask(hosts: &[&str], request: &[u8]) -> String {
         let hosts: Arc<[String]> = hosts.iter().map(|h| h.to_string()).collect();
-        let (mut client, server) = tokio::io::duplex(4096);
+        let (mut client, server) = tokio::io::duplex(16 * 1024);
         tokio::spawn(proxy(server, hosts));
-        client.write_all(request.as_bytes()).await.unwrap();
+        client.write_all(request).await.unwrap();
         let mut out = vec![0; 64];
-        let n = client.read(&mut out).await.unwrap();
+        let n = client.read(&mut out).await.unwrap_or(0);
         String::from_utf8_lossy(&out[..n]).into_owned()
     }
 
@@ -216,21 +290,84 @@ mod tests {
     async fn the_proxy_joins_admitted_hosts_only() {
         let up = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = up.local_addr().unwrap().to_string();
-        tokio::spawn(async move {
+        let early = tokio::spawn(async move {
             let (mut s, _) = up.accept().await.unwrap();
             s.write_all(b"hello").await.unwrap();
+            let mut got = vec![0; 5];
+            s.read_exact(&mut got).await.unwrap();
+            got
         });
         let ok = ask(
             &[&addr],
-            &format!("CONNECT {addr} HTTP/1.1\r\nhost: x\r\n\r\n"),
+            format!("CONNECT {addr} HTTP/1.1\r\nhost: x\r\n\r\nearly").as_bytes(),
         )
         .await;
         assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+        assert_eq!(early.await.unwrap(), b"early", "bytes after the head go on");
+        let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other = other.local_addr().unwrap();
         for refused in [
             "CONNECT evil.example:443 HTTP/1.1\r\n\r\n".to_owned(),
+            format!("CONNECT {other} HTTP/1.1\r\n\r\n"),
             format!("GET http://{addr}/ HTTP/1.1\r\n\r\n"),
         ] {
-            assert!(ask(&[&addr], &refused).await.starts_with("HTTP/1.1 403"));
+            assert!(
+                ask(&[&addr], refused.as_bytes())
+                    .await
+                    .starts_with("HTTP/1.1 403"),
+                "{refused}"
+            );
         }
+        let huge = [b'a'; HEAD_LIMIT + 2048];
+        assert_eq!(ask(&[&addr], &huge).await, "", "an endless head is dropped");
+    }
+
+    #[test]
+    fn the_bridge_refuses_a_malformed_command_line() {
+        let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
+        for bad in [
+            args(&["127.0.0.1:0=/nowhere", "/bin/true"]),
+            args(&["no-socket", "--", "/bin/true"]),
+            args(&["127.0.0.1:0=/nowhere", "--"]),
+        ] {
+            assert!(bridge(bad.clone()).is_err(), "{bad:?}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_carried_file_goes_in_and_comes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("c.sock");
+        let c = Arc::new(Carry {
+            give: b"login v1".to_vec(),
+            ..Carry::default()
+        });
+        let mut gate = Gate::default();
+        gate.serve(
+            tokio::net::UnixListener::bind(&sock).unwrap(),
+            Route::Carry(c.clone()),
+        );
+        let file = dir.path().join("home/.agent/auth.json");
+        let script = format!(
+            "cat '{0}' > '{0}.seen'; printf 'login v2' > '{0}'",
+            file.display()
+        );
+        let args: Vec<OsString> = [
+            format!("@{}={}", file.display(), sock.display()),
+            "--".into(),
+            "/bin/sh".into(),
+            "-c".into(),
+            script,
+        ]
+        .map(OsString::from)
+        .into();
+        let code = tokio::task::spawn_blocking(move || bridge(args))
+            .await
+            .unwrap();
+        assert_eq!(code.unwrap(), 0);
+        let seen = std::fs::read(file.with_extension("json.seen")).unwrap();
+        assert_eq!(seen, b"login v1");
+        assert_eq!(c.back.lock().unwrap().as_deref(), Some(&b"login v2"[..]));
     }
 }

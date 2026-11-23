@@ -28,10 +28,11 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 ## Agent runs (`sim-runner`)
 
-- Start every agent process through `sandbox::command`. Never launch an agent unsandboxed, and never start agents when `check_sandbox` fails.
+- Start every agent process through `turn::sandbox`. Never launch an agent unsandboxed, and never start agents when `check_sandbox` fails.
+- A run's network is the gate's (`net`). An agent kind lists the hosts it needs in its `HOSTS`, confirmed against the gate's refusal log in a live run, and nothing more.
 - Nothing of the user reaches a run: no host environment variable beyond the sandbox's list, no host path, no file of theirs, no account detail. A new agent kind or flag needs a test that proves it.
 - A run knows only its own seat token, passed on stdin, never on the command line.
-- The only credential Empire stores is the user's agent login, in Empire's data directory with mode 0600.
+- The only credentials Empire stores are the user's agent logins, in Empire's data directory, readable only by the user. A run gets a copy, never a mount of them.
 - Run output and logs are private to the user (`fs::private_dir`, `fs::private_file`), since they hold seat tokens and secrets.
 
 ## Scenario-agnostic code

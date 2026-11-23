@@ -22,9 +22,10 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
-use crate::claude::{self, Turn};
 use crate::config::{AgentConfig, RunnerConfig};
 use crate::fs::private_dir;
+use crate::turn::Turn;
+use crate::{claude, codex};
 
 type Client = RunningService<RoleClient, ClientConfig>;
 
@@ -40,8 +41,10 @@ pub struct Plan {
     pub log_dir: PathBuf,
     /// The token from `claude setup-token` that Claude seats log in with.
     pub claude_token: Option<String>,
-    /// Set while the provider refuses that login, so the user can be told to renew it.
-    pub login_refused: Arc<AtomicBool>,
+    /// Empire's Codex home, logged in, that Codex seats log in from.
+    pub codex_login: Option<PathBuf>,
+    /// The logins providers refuse, so the user can be told to renew them.
+    pub login_refused: Arc<Refused>,
     /// An Empire executable that answers [`crate::bridge_if_asked`].
     pub bridge: PathBuf,
 }
@@ -52,8 +55,49 @@ pub enum PlanError {
     NoToken(SeatId),
     #[error("seat id `{0}` cannot name a log directory")]
     BadSeatId(SeatId),
-    #[error("seat `{0}` is played by Claude Code, which is not connected to Empire")]
+    #[error(
+        "seat `{0}` is played by Claude Code, which is not connected to Empire: run \
+         `claude setup-token`, then save the token with `sim-server login` or in the app"
+    )]
     NoClaudeLogin(SeatId),
+    #[error(
+        "seat `{0}` is played by Codex, which is not connected to Empire: run \
+         `sim-server login codex`, or connect it in the app"
+    )]
+    NoCodexLogin(SeatId),
+    #[error("agents on this machine reach the world only on a loopback address, not `{0}`")]
+    RemoteWorld(String),
+}
+
+/// Which providers refused Empire's login on their last run.
+#[derive(Debug, Default)]
+pub struct Refused {
+    claude: AtomicBool,
+    codex: AtomicBool,
+}
+
+impl Refused {
+    /// What to tell the user, a line per refused login.
+    pub fn alerts(&self) -> Vec<&'static str> {
+        [
+            (&self.claude, claude::LOGIN_REFUSED),
+            (&self.codex, codex::LOGIN_REFUSED),
+        ]
+        .into_iter()
+        .filter(|(f, _)| f.load(Ordering::Relaxed))
+        .map(|(_, m)| m)
+        .collect()
+    }
+
+    fn note(&self, agent: &AgentConfig, refused: bool) {
+        let (flag, alert) = match agent {
+            AgentConfig::Claude(_) => (&self.claude, claude::LOGIN_REFUSED),
+            AgentConfig::Codex(_) => (&self.codex, codex::LOGIN_REFUSED),
+        };
+        if flag.swap(refused, Ordering::Relaxed) != refused && refused {
+            tracing::error!("{alert}");
+        }
+    }
 }
 
 /// Whether a seat id can name its log directory. The runner plays only such seats.
@@ -64,6 +108,9 @@ pub fn seat_id_ok(seat: &SeatId) -> bool {
 
 impl Plan {
     pub fn validate(&self) -> Result<(), PlanError> {
+        if !self.config.seats.is_empty() && crate::net::loopback(&self.mcp_url).is_err() {
+            return Err(PlanError::RemoteWorld(self.mcp_url.clone()));
+        }
         for s in self.config.seats.keys() {
             if !seat_id_ok(s) {
                 return Err(PlanError::BadSeatId(s.clone()));
@@ -71,8 +118,14 @@ impl Plan {
             if !self.tokens.contains_key(s) {
                 return Err(PlanError::NoToken(s.clone()));
             }
-            if self.claude_token.is_none() {
-                return Err(PlanError::NoClaudeLogin(s.clone()));
+            match &self.config.seats[s] {
+                AgentConfig::Claude(_) if self.claude_token.is_none() => {
+                    return Err(PlanError::NoClaudeLogin(s.clone()));
+                }
+                AgentConfig::Codex(c) if c.local.is_none() && self.codex_login.is_none() => {
+                    return Err(PlanError::NoCodexLogin(s.clone()));
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -167,11 +220,7 @@ async fn session(
     pause: &mut Duration,
 ) -> Result<std::convert::Infallible, SessionError> {
     let token = &plan.tokens[seat];
-    let AgentConfig::Claude(agent) = &plan.config.seats[seat];
-    let login = plan
-        .claude_token
-        .as_deref()
-        .expect("validate refuses a Claude seat without a login");
+    let agent = &plan.config.seats[seat];
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(plan.mcp_url.clone()),
     );
@@ -214,17 +263,21 @@ async fn session(
                     .join(seat.as_str())
                     .join(format!("tick-{tick}.jsonl"));
                 let closed = tick_closed(&client, &token_arg, tick);
-                match claude::play(
-                    agent,
-                    login,
-                    &plan.bridge,
-                    &turn,
-                    &log,
-                    plan.config.turn_timeout(),
-                    closed,
-                )
-                .await
-                {
+                let timeout = plan.config.turn_timeout();
+                let report = match agent {
+                    AgentConfig::Claude(a) => {
+                        let login = plan
+                            .claude_token
+                            .as_deref()
+                            .expect("validate refuses a Claude seat without a login");
+                        claude::play(a, login, &plan.bridge, &turn, &log, timeout, closed).await
+                    }
+                    AgentConfig::Codex(a) => {
+                        let login = plan.codex_login.as_deref().filter(|_| a.local.is_none());
+                        codex::play(a, login, &plan.bridge, &turn, &log, timeout, closed).await
+                    }
+                };
+                match report {
                     Ok(r) => {
                         tracing::info!(
                             outcome = ?r.outcome,
@@ -232,12 +285,10 @@ async fn session(
                             cost_usd = r.summary.as_ref().map(|s| s.total_cost_usd),
                             "agent turn finished"
                         );
-                        if let Some(s) = &r.summary {
-                            let refused = s.login_refused();
-                            let was = plan.login_refused.swap(refused, Ordering::Relaxed);
-                            if refused && !was {
-                                tracing::error!("{}", claude::LOGIN_REFUSED);
-                            }
+                        let own_login =
+                            !matches!(agent, AgentConfig::Codex(c) if c.local.is_some());
+                        if let Some(s) = r.summary.as_ref().filter(|_| own_login) {
+                            plan.login_refused.note(agent, s.login_refused());
                         }
                     }
                     Err(e) => tracing::warn!(error = %e, "agent turn failed"),
@@ -312,9 +363,10 @@ mod tests {
         Plan {
             config: RunnerConfig::from_yaml(yaml).unwrap(),
             tokens: BTreeMap::new(),
-            mcp_url: "http://x/mcp".into(),
+            mcp_url: "http://127.0.0.1:1/mcp".into(),
             log_dir: "runs".into(),
             claude_token: Some("t".into()),
+            codex_login: None,
             login_refused: Default::default(),
             bridge: "bridge".into(),
         }
@@ -328,6 +380,18 @@ mod tests {
         assert_eq!(p.validate(), Ok(()));
         p.claude_token = None;
         assert_eq!(p.validate(), Err(PlanError::NoClaudeLogin("a".into())));
+        let mut p = plan(
+            "seats:\n  a: { codex: {} }\n  b: { codex: { local: 'http://127.0.0.1:1/v1' } }\n",
+        );
+        p.tokens
+            .extend([("a".into(), "t".into()), ("b".into(), "t".into())]);
+        assert_eq!(p.validate(), Err(PlanError::NoCodexLogin("a".into())));
+        p.codex_login = Some("codex".into());
+        assert_eq!(p.validate(), Ok(()));
+        let mut p = plan("seats:\n  a: { claude: {} }\n");
+        p.tokens.insert("a".into(), "t".into());
+        p.mcp_url = "http://192.168.1.5:7878/mcp".into();
+        assert!(matches!(p.validate(), Err(PlanError::RemoteWorld(_))));
         let mut p = plan("seats:\n  '..': { claude: {} }\n");
         p.tokens.insert("..".into(), "t".into());
         assert_eq!(p.validate(), Err(PlanError::BadSeatId("..".into())));

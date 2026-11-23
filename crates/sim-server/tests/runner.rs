@@ -6,10 +6,10 @@ use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use sim_core::{SeatId, Tick};
+use sim_runner::runner::Refused;
 use sim_runner::{Plan, RunnerConfig};
 use sim_server::game::Game;
 
@@ -21,7 +21,7 @@ const LOGIN: &str = "sk-ant-oat01-test-login";
 
 struct Setup {
     game: Game,
-    login_refused: Arc<AtomicBool>,
+    login_refused: Arc<Refused>,
     tokens: std::collections::BTreeMap<SeatId, String>,
     dir: tempfile::TempDir,
 }
@@ -103,6 +103,16 @@ fn parse(seat: &str, log: &str) -> Vec<Run> {
     runs
 }
 
+/// The run's home, beside its working directory.
+const HOME: &str = if cfg!(target_os = "macos") {
+    "home"
+} else {
+    "home/agent"
+};
+
+/// Nanoseconds since the epoch: macOS's `date` has no `%N`.
+const NOW: &str = "perl -MTime::HiRes=time -e 'printf qq(%d), time * 1e9'";
+
 /// A fake agent CLI that reports its arguments, prompt, directory and environment, runs
 /// `body`, and then writes a closing summary.
 fn fake_claude(dir: &Path, body: &str) -> PathBuf {
@@ -110,13 +120,13 @@ fn fake_claude(dir: &Path, body: &str) -> PathBuf {
     let script = format!(
         "#!/bin/sh\n\
          echo begin\n\
-         echo \"start=$(date +%s%N)\"\n\
+         echo \"start=$({NOW})\"\n\
          for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done\n\
          sed 's/^/stdin=/'; echo\n\
          echo \"cwd=$(pwd)\"\n\
          env | sed 's/^/env=/'\n\
          {body}\n\
-         echo \"end=$(date +%s%N)\"\n\
+         echo \"end=$({NOW})\"\n\
          echo '{{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"duration_ms\":1,\"total_cost_usd\":0}}'\n",
     );
     std::fs::write(&path, script).unwrap();
@@ -150,6 +160,7 @@ async fn start_with_deadline(body: &str, extra: &str, deadline: Duration) -> Set
         mcp_url: format!("http://{addr}/mcp"),
         log_dir: dir.path().join("runs"),
         claude_token: Some(LOGIN.into()),
+        codex_login: None,
         login_refused: Arc::default(),
         bridge: env!("CARGO_BIN_EXE_sim-server").into(),
     };
@@ -267,10 +278,15 @@ async fn runs_are_sandboxed_with_only_the_login_and_private_logs() {
     let s = start("", "max_concurrent: 4\n").await;
     s.wait_for_tick(1).await;
     for (_, r) in s.runs().into_iter().filter(|(_, r)| r.end.is_some()) {
-        assert_eq!(r.cwd, "/work", "{r:?}");
+        assert!(r.cwd.ends_with("/work"), "{r:?}");
         assert!(!r.env.iter().any(|e| e.contains("CARGO")), "{:?}", r.env);
+        let home = r.env.iter().find_map(|e| e.strip_prefix("HOME=")).unwrap();
+        assert_eq!(
+            Path::new(home),
+            Path::new(&r.cwd).with_file_name(HOME),
+            "{r:?}"
+        );
         for want in [
-            "HOME=/home/agent",
             &format!("CLAUDE_CODE_OAUTH_TOKEN={LOGIN}"),
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
         ] {
@@ -291,7 +307,7 @@ async fn runs_are_sandboxed_with_only_the_login_and_private_logs() {
 /// proxy a host its provider does not need.
 const PROBE: &str = r#"python3 -c '
 import json, os, socket, sys, urllib.parse
-a = sys.argv[1:]
+a = sys.argv[2:]
 world = urllib.parse.urlparse(json.loads(a[a.index("--mcp-config") + 1])["mcpServers"]["empire"]["url"])
 proxy = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
 def probe(name, host, port, send=None):
@@ -303,12 +319,15 @@ def probe(name, host, port, send=None):
     print("net=%s %s" % (name, r))
 probe("world", world.hostname, world.port)
 probe("internet", "1.1.1.1", 443)
+probe("other-local", "127.0.0.1", int(sys.argv[1]))
 probe("other-host", proxy.hostname, proxy.port, b"CONNECT example.com:443 HTTP/1.1\r\n\r\n")
-' "$@""#;
+' "$OTHER" "$@""#;
 
 #[tokio::test]
 async fn a_run_reaches_the_world_and_its_provider_only() {
-    let s = start(PROBE, "max_concurrent: 4\n").await;
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let body = format!("OTHER={}\n{PROBE}", other.local_addr().unwrap().port());
+    let s = start(&body, "max_concurrent: 4\n").await;
     s.wait_for_tick(1).await;
     let (_, r) = s.runs().into_iter().find(|(_, r)| r.end.is_some()).unwrap();
     assert_eq!(
@@ -316,6 +335,7 @@ async fn a_run_reaches_the_world_and_its_provider_only() {
         [
             "world open",
             "internet unreachable",
+            "other-local unreachable",
             "other-host HTTP/1.1 403 Forbidden"
         ],
         "{r:?}"
@@ -327,5 +347,8 @@ async fn a_refused_login_raises_the_alert_until_a_run_succeeds() {
     let refused = "echo '{\"type\":\"result\",\"is_error\":true,\"api_error_status\":401}'; exit 0";
     let s = start(refused, "max_concurrent: 4\n").await;
     s.wait_for_tick(1).await;
-    assert!(s.login_refused.load(Ordering::Relaxed));
+    assert_eq!(
+        s.login_refused.alerts(),
+        [sim_runner::claude::LOGIN_REFUSED]
+    );
 }

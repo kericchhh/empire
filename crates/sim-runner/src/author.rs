@@ -13,9 +13,10 @@ use std::time::Duration;
 use serde_json::Value;
 use sim_core::{Ruleset, Scenario, World};
 
-use crate::claude::{self, Outcome, RunError, Summary};
+use crate::claude;
 use crate::config::ClaudeConfig;
 use crate::sandbox::SandboxError;
+use crate::turn::{Outcome, RunError, Summary, launch, sandbox};
 
 /// A scenario an agent wrote and the engine accepted.
 #[derive(Debug, Clone)]
@@ -168,8 +169,9 @@ pub async fn author(job: &AuthorJob<'_>) -> Result<Authored, AuthorError> {
             rejected.as_ref().map(|(d, p)| (d.as_str(), p.as_str())),
         );
         let log = job.log_dir.join(format!("author-{attempt}.json"));
-        let outcome = claude::launch(
-            &claude::spec(job.agent, job.login, job.bridge, Vec::new()),
+        let mut run = sandbox(&claude::spec(job.agent, job.login, job.bridge, Vec::new()))?;
+        let outcome = launch(
+            &mut run,
             args(job.agent),
             &input,
             &log,

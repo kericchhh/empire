@@ -20,3 +20,23 @@ pub(crate) fn private_file(path: &Path, append: bool) -> io::Result<File> {
         .mode(0o600)
         .open(path)
 }
+
+/// The most a run may carry back out in a file.
+pub(crate) const CARRY_LIMIT: u64 = 1 << 20;
+
+/// The file at `path` if it is a regular file, not a link, of at most [`CARRY_LIMIT`] bytes:
+/// a run decides what it leaves there.
+pub(crate) fn read_carried(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    if !m.is_file() || m.len() > CARRY_LIMIT {
+        return None;
+    }
+    let mut out = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(CARRY_LIMIT + 1)
+        .read_to_end(&mut out)
+        .ok()?;
+    (out.len() as u64 <= CARRY_LIMIT).then_some(out)
+}
