@@ -5,15 +5,12 @@ description: >-
 runs:
   using: composite
   steps:
-    # Tauri's Linux prerequisites (tauri.app/start/prerequisites), less the tray and bundler ones.
     - name: Install system libraries
       shell: bash
       run: sudo apt-get update -qq && sudo apt-get install -y -qq libwebkit2gtk-4.1-dev librsvg2-dev
-    # Install before rust-cache: the cache key includes the rustc version.
     - name: Install toolchain
       shell: bash
       run: rustup show active-toolchain || rustup toolchain install
     - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
-        # PRs restore main's cache but never write one, so they cannot evict it.
         save-if: ${{ github.ref == 'refs/heads/main' }}

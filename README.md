@@ -10,34 +10,45 @@ The server never calls a model. Agents connect to it, the same way a player join
 cd app && pnpm install && pnpm tauri dev
 ```
 
-Create a world by describing it or from a scenario file, and let agents play every seat. Then watch the whole world, any one empire, or exactly what any one seat's agent sees. Read the chronicle, advance a tick by hand, inject events, and copy a seat's token to connect an outside agent. Worlds are saved in the app's data directory and reopen where they stopped.
+Create a world by describing it or from a scenario file, and let agents play every seat. Then watch the whole world, any one empire, or exactly what any one seat's agent sees. Read the chronicle, advance a tick by hand, inject events, and copy a seat's token to connect an outside agent. Worlds are saved in Empire's data directory on your machine (`~/.local/share/dev.empire.app/worlds` on Linux, `~/Library/Application Support/dev.empire.app/worlds` on macOS) and reopen where they stopped.
 
 On Linux the app needs WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev` on Debian and Ubuntu, `webkit2gtk-4.1` on Arch).
 
 ## Run a world headless
 
-Empire runs on Linux and macOS.
+Empire runs on Linux and macOS. On Linux, agent runs are sandboxed with bubblewrap: install `bubblewrap` (on Ubuntu 24.04 and later, also allow unprivileged user namespaces for it). macOS uses its built-in `sandbox-exec`.
+
+Connect Claude Code once. Run `claude setup-token`, which prints a long-lived token for your Claude subscription, then save it for Empire:
+
+```sh
+claude setup-token
+cargo run -p sim-server -- login
+```
+
+The token lasts a year. When it expires or is revoked, the server log and the app say so; run both commands again.
 
 Describe the world you want, and let Claude Code write it and play every seat:
 
 ```sh
-cargo run -p sim-server -- run --db delta.db \
+cargo run -p sim-server -- run --world delta \
   --prompt "Three rival river city-states in a bronze-age delta: priest-kings, merchants, warriors" \
   --play-all claude:haiku --tick-seconds 900
 ```
 
-Your agent writes the scenario (the setting only: no rules, no endings), the engine checks it, and a rejected draft goes back to the agent with the reasons, for up to three attempts in all. The result is saved as `delta.scenario.yaml` so you can read it, edit it, or start it again. `--author claude:<model>` picks the model that writes it. To write one without running it: `sim-server create --prompt "..." --out world.yaml` (its run logs go to `world.runs/`).
+Your agent writes the scenario (the setting only: no rules, no endings), the engine checks it, and a rejected draft goes back to the agent with the reasons, for up to three attempts in all. The result is saved beside the world as `delta.scenario.yaml`, so you can read it, edit it, or start it again. `--author claude:<model>` picks the model that writes it. To write one without running it: `sim-server create --prompt "..." --out world.yaml` (its run logs go to `world.runs/`).
 
 Or run a scenario file you wrote or saved:
 
 ```sh
-cargo run -p sim-server -- run --db rome.db --scenario scenarios/rome.yaml --tick-seconds 300
+cargo run -p sim-server -- run --world rome --scenario scenarios/rome.yaml --tick-seconds 300
 ```
 
-On first start the server creates the world and prints one **admin token** and one **token per seat**. Restart it with the same `--db` to resume the world exactly where it stopped. After that, `--scenario` isn't needed.
+`--world NAME` keeps the world in Empire's data directory, where the desktop app finds it too; `--db FILE` puts it in a file of your choosing instead. On first start the server creates the world and prints one **admin token** and one **token per seat**. Restart it with the same `--world` to resume the world exactly where it stopped. After that, `--scenario` isn't needed.
 
 | Flag | Meaning |
 |---|---|
+| `--world NAME` | The world, kept in Empire's data directory. Or `--db FILE` for a file of your choosing. |
+| `--runs DIR` | Where run logs go (default: `<world>.runs` beside the world). |
 | `--tick-seconds N` | Close a tick after N seconds, even if some seats are still deciding (default 300). |
 | `--autoplay` | Advance on the deadline even when no seat has joined. The rules run the world alone. |
 | `--seed N` | Seed for random events. The same seed and the same orders give the same history. |
@@ -47,14 +58,14 @@ On first start the server creates the world and prints one **admin token** and o
 | `--agents FILE` | Seats that a local agent CLI plays, and how. See below. |
 | `--allowed-host NAME` | Accept MCP requests addressed to this hostname. Needed when agents connect from another machine. |
 
-Other commands: `sim-server check <scenario>` validates a file, and `sim-server schema` prints the JSON Schema that `schema/scenario.schema.json` holds.
+Other commands: `sim-server login` saves the Claude login, `sim-server check <scenario>` validates a file, and `sim-server schema` prints the JSON Schema that `schema/scenario.schema.json` holds.
 
 ## Let Claude Code play the seats
 
 One subscription can play any number of seats, in one empire or in rival ones. `--play-all claude:haiku` gives every seat the same agent. For a mix, use an agents file; `all` covers every seat it doesn't list, so the same file fits any scenario:
 
 ```sh
-cargo run -p sim-server -- run --db rome.db --scenario scenarios/rome.yaml --agents agents/rome-claude.yaml
+cargo run -p sim-server -- run --world rome --scenario scenarios/rome.yaml --agents agents/rome-claude.yaml
 ```
 
 ```yaml
@@ -65,13 +76,14 @@ seats:                     # optional overrides by seat id
   princeps: { claude: { model: sonnet } }
 ```
 
-Each turn, every listed seat gets a fresh headless `claude -p` run that knows only its own seat token. Seats of rival empires on the same login stay apart:
+Each turn, every listed seat gets a fresh headless `claude -p` run that knows only its own seat token. Seats of rival empires on the same login stay apart, and nothing of yours reaches them:
 
-- the run has no built-in tools, so no files and no shell, only the world's MCP tools for one turn (`look`, `act`, `rule`, `message`, `note`, `end_turn`);
-- it loads no settings files and keeps no session, and it starts in an empty working directory with a cleared environment. Your global `~/.claude/CLAUDE.md` may still load, the same for every seat;
+- the run is sandboxed by the operating system with an empty home and an empty working directory. Your files, the world database, the run logs, your own Claude Code settings, history and `CLAUDE.md`, and any git repository around the world are out of its reach. Empire needs the native Claude Code install (`claude install`), not an npm one;
+- it logs in with the `setup-token` login, and Claude Code's non-essential traffic is off, so it never fetches your account profile: your name and email don't reach the model;
+- it has no built-in tools, so no files and no shell, only the world's MCP tools for one turn (`look`, `act`, `rule`, `message`, `note`, `end_turn`). It loads no settings files and keeps no session;
 - what a character remembers between turns is its `note`s.
 
-When a run finishes, times out, or its tick closes on the deadline, the runner stops it and ends the seat's turn. Each run's output goes to `<db>.runs/<seat>/tick-<n>.jsonl`, readable only by you since it holds the seat's token (change the location with `--runs DIR`). Runs queue for `max_concurrent` slots, so keep `ceil(seats / max_concurrent) × turn_timeout_seconds` below `--tick-seconds`; the server warns when it isn't. The game master seat can't be given to the runner yet, because it would rule before the other seats act.
+When a run finishes, times out, or its tick closes on the deadline, the runner stops it and ends the seat's turn. Each run's output is added to `<world>.runs/<seat>/tick-<n>.jsonl` beside the world, readable only by you since it holds the seat's token (change the location with `--runs DIR`). Runs queue for `max_concurrent` slots, so keep `ceil(seats / max_concurrent) × turn_timeout_seconds` below `--tick-seconds`; the server warns when it isn't. The game master seat can't be given to the runner yet, because it would rule before the other seats act.
 
 Seats you leave out work as before: connect an agent yourself, or leave them to the rules engine.
 

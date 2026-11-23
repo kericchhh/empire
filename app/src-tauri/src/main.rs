@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use sim_core::perceive::{Sight, describe};
 use sim_core::{Effect, EmpireId, SeatId};
 use sim_runner::{AgentConfig, AuthorJob, RunnerConfig};
+use sim_runner::{claude_token, world_db, worlds_dir};
 use sim_server::game::{Config, Overview, TurnView};
 use sim_server::host::{Hosted, Options, host};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
 type Res<T> = Result<T, String>;
@@ -22,16 +23,10 @@ fn err(e: impl std::fmt::Display) -> String {
 #[derive(Default)]
 struct App(Mutex<Option<Hosted>>);
 
-/// Worlds live in the app's data directory as `<name>.db`, with their logs beside them.
-fn worlds(app: &AppHandle) -> Res<PathBuf> {
-    let dir = app.path().app_data_dir().map_err(err)?.join("worlds");
-    std::fs::create_dir_all(&dir).map_err(err)?;
-    Ok(dir)
-}
-
+/// Worlds live in Empire's data directory as `<name>.db`, shared with `sim-server --world`.
 #[tauri::command]
-fn list_worlds(app: AppHandle) -> Res<Vec<String>> {
-    let mut names: Vec<String> = std::fs::read_dir(worlds(&app)?)
+fn list_worlds() -> Res<Vec<String>> {
+    let mut names: Vec<String> = std::fs::read_dir(worlds_dir().map_err(err)?)
         .map_err(err)?
         .filter_map(|e| {
             let p = e.ok()?.path();
@@ -83,14 +78,10 @@ struct Opened {
 
 #[tauri::command]
 async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Res<Opened> {
-    if req.name.is_empty() || req.name.contains(['/', '\\', '.']) {
-        return Err("a world name may not be empty or contain `/`, `\\` or `.`".into());
-    }
+    let db = world_db(&req.name).map_err(err)?;
     let mut slot = state.0.lock().await;
     *slot = None;
-    let dir = worlds(&app)?;
-    let db = dir.join(format!("{}.db", req.name));
-    let runs = dir.join(format!("{}.runs", req.name));
+    let runs = db.with_extension("runs");
     let parse = |a: &str| a.parse::<AgentConfig>().map_err(err);
     let scenario = match &req.source {
         Source::Saved if !db.exists() => return Err(format!("no saved world `{}`", req.name)),
@@ -101,6 +92,7 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
             let AgentConfig::Claude(agent) = parse(author)?;
             let a = sim_runner::author(&AuthorJob {
                 agent: &agent,
+                login: &claude_token().map_err(err)?,
                 request: text,
                 log_dir: &runs,
                 attempts: 3,
@@ -108,8 +100,7 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
             })
             .await
             .map_err(err)?;
-            std::fs::write(dir.join(format!("{}.scenario.yaml", req.name)), &a.yaml)
-                .map_err(err)?;
+            std::fs::write(db.with_extension("scenario.yaml"), &a.yaml).map_err(err)?;
             Some(a.yaml)
         }
     };
@@ -138,6 +129,10 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
                 autoplay: req.autoplay,
             },
             allowed_hosts: vec![],
+            claude_token: agents
+                .as_ref()
+                .map(|_| claude_token().map_err(err))
+                .transpose()?,
             agents,
             runs,
         },
@@ -193,6 +188,18 @@ async fn with<T>(state: &State<'_, App>, f: impl AsyncFnOnce(&Hosted) -> Res<T>)
 #[tauri::command]
 async fn overview(state: State<'_, App>) -> Res<Overview> {
     with(&state, async |h| Ok(h.game.overview().await)).await
+}
+
+/// A problem the user must fix for agents to keep playing, if there is one.
+#[tauri::command]
+async fn agents_alert(state: State<'_, App>) -> Res<Option<&'static str>> {
+    with(&state, async |h| {
+        Ok(h.agents
+            .as_ref()
+            .filter(|p| p.login_refused.load(std::sync::atomic::Ordering::Relaxed))
+            .map(|_| sim_runner::claude::LOGIN_REFUSED))
+    })
+    .await
 }
 
 /// The world as one seat's characters know it.
@@ -280,45 +287,39 @@ async fn advance_tick(state: State<'_, App>) -> Res<u64> {
     .await
 }
 
-/// What the local Claude Code CLI says about itself and its login. Runs no model.
-#[derive(Serialize, Default)]
+/// Whether Claude Code is installed, whether Empire holds a login for it, and why agent runs
+/// cannot be sandboxed on this machine, if they cannot. Runs no model.
+#[derive(Serialize)]
 struct ClaudeStatus {
     version: Option<String>,
-    logged_in: bool,
-    auth_method: Option<String>,
-    plan: Option<String>,
+    connected: bool,
+    sandbox_problem: Option<String>,
 }
 
 #[tauri::command]
 async fn claude_status() -> ClaudeStatus {
-    // A stalled CLI (a keychain prompt, a dead network) must not leave Providers checking forever.
-    let run = async |args: &[&str]| {
-        let out = tokio::process::Command::new("claude")
-            .args(args)
-            .kill_on_drop(true)
-            .output();
-        let out = tokio::time::timeout(std::time::Duration::from_secs(10), out)
-            .await
-            .ok()?
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
-    };
-    let Some(version) = run(&["--version"]).await else {
-        return ClaudeStatus::default();
-    };
-    let auth: serde_json::Value = run(&["auth", "status", "--json"])
+    // A stalled CLI must not leave Providers checking forever.
+    let out = tokio::process::Command::new("claude")
+        .arg("--version")
+        .kill_on_drop(true)
+        .output();
+    let version = tokio::time::timeout(Duration::from_secs(10), out)
         .await
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let field = |k: &str| auth[k].as_str().map(str::to_owned);
+        .ok()
+        .and_then(Result::ok)
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
     ClaudeStatus {
-        version: Some(version),
-        logged_in: auth["loggedIn"].as_bool().unwrap_or(false),
-        auth_method: field("authMethod"),
-        plan: field("subscriptionType"),
+        version,
+        connected: claude_token().is_ok(),
+        sandbox_problem: sim_runner::check_sandbox().err().map(|e| e.to_string()),
     }
+}
+
+/// Save the token `claude setup-token` printed, so seats can log in inside their sandbox.
+#[tauri::command]
+fn save_claude_token(token: String) -> Res<()> {
+    sim_runner::save_claude_token(&token).map_err(err)
 }
 
 fn main() {
@@ -339,7 +340,9 @@ fn main() {
             chronicle,
             intervene,
             advance_tick,
-            claude_status
+            claude_status,
+            save_claude_token,
+            agents_alert
         ])
         .run(tauri::generate_context!())
         .expect("the app window could not start");

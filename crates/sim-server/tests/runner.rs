@@ -1,8 +1,12 @@
-//! The runner against a real world host, with a fake `claude` that records how it was run.
+//! The runner against a real world host, with a fake `claude` that reports how it was run.
+//! Runs are sandboxed away from the test's files, so the fake reports on its stdout, which
+//! the runner keeps as the run's log.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use sim_core::{SeatId, Tick};
@@ -13,18 +17,29 @@ mod common;
 
 /// Seats of both empires in the tiny world, all played by one provider.
 const SEATS: [&str; 4] = ["crown", "rival", "folk", "pirates"];
+const LOGIN: &str = "sk-ant-oat01-test-login";
 
 struct Setup {
     game: Game,
-    tokens: BTreeMap<SeatId, String>,
+    login_refused: Arc<AtomicBool>,
+    tokens: std::collections::BTreeMap<SeatId, String>,
     dir: tempfile::TempDir,
 }
 
+/// One run as the fake reported it.
+#[derive(Debug, Default)]
+struct Run {
+    seat: String,
+    args: Vec<String>,
+    stdin: String,
+    cwd: String,
+    env: Vec<String>,
+    start: u128,
+    end: Option<u128>,
+}
+
 impl Setup {
-    fn calls(&self) -> PathBuf {
-        self.dir.path().join("calls")
-    }
-    fn runs(&self) -> PathBuf {
+    fn runs_dir(&self) -> PathBuf {
         self.dir.path().join("runs")
     }
 
@@ -39,24 +54,68 @@ impl Setup {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
+
+    /// Every run logged so far, with the log file it is in.
+    fn runs(&self) -> Vec<(PathBuf, Run)> {
+        let mut out = Vec::new();
+        for seat in SEATS {
+            let Ok(logs) = std::fs::read_dir(self.runs_dir().join(seat)) else {
+                continue;
+            };
+            for log in logs.map(|e| e.unwrap().path()) {
+                if log.extension().is_none_or(|x| x != "jsonl") {
+                    continue;
+                }
+                for run in parse(seat, &std::fs::read_to_string(&log).unwrap()) {
+                    out.push((log.clone(), run));
+                }
+            }
+        }
+        out
+    }
 }
 
-/// A fake agent CLI: `body` runs after it saves its arguments and stdin under `calls/`.
+fn parse(seat: &str, log: &str) -> Vec<Run> {
+    let mut runs: Vec<Run> = Vec::new();
+    for line in log.lines() {
+        if line == "begin" {
+            runs.push(Run {
+                seat: seat.into(),
+                ..Run::default()
+            });
+            continue;
+        }
+        let (Some(r), Some((k, v))) = (runs.last_mut(), line.split_once('=')) else {
+            continue;
+        };
+        match k {
+            "arg" => r.args.push(v.into()),
+            "stdin" => r.stdin.push_str(&format!("{v}\n")),
+            "cwd" => r.cwd = v.into(),
+            "env" => r.env.push(v.into()),
+            "start" => r.start = v.parse().unwrap(),
+            "end" => r.end = Some(v.parse().unwrap()),
+            _ => {}
+        }
+    }
+    runs
+}
+
+/// A fake agent CLI that reports its arguments, prompt, directory and environment, runs
+/// `body`, and then writes a closing summary.
 fn fake_claude(dir: &Path, body: &str) -> PathBuf {
-    let calls = dir.join("calls");
-    std::fs::create_dir_all(&calls).unwrap();
     let path = dir.join("claude");
     let script = format!(
         "#!/bin/sh\n\
-         id=$$\n\
-         save() {{ cat > '{calls}'/$id.$1.tmp && mv '{calls}'/$id.$1.tmp '{calls}'/$id.$1; }}\n\
-         printf '%s\\n' \"$@\" | save args\n\
-         save stdin\n\
-         pwd | save cwd\n\
-         env | save env\n\
+         echo begin\n\
+         echo \"start=$(date +%s%N)\"\n\
+         for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done\n\
+         sed 's/^/stdin=/'; echo\n\
+         echo \"cwd=$(pwd)\"\n\
+         env | sed 's/^/env=/'\n\
          {body}\n\
+         echo \"end=$(date +%s%N)\"\n\
          echo '{{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"duration_ms\":1,\"total_cost_usd\":0}}'\n",
-        calls = calls.display(),
     );
     std::fs::write(&path, script).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -88,24 +147,17 @@ async fn start_with_deadline(body: &str, extra: &str, deadline: Duration) -> Set
         config,
         mcp_url: format!("http://{addr}/mcp"),
         log_dir: dir.path().join("runs"),
+        claude_token: Some(LOGIN.into()),
+        login_refused: Arc::default(),
     };
+    let login_refused = plan.login_refused.clone();
     tokio::spawn(sim_runner::run(plan));
     Setup {
         game: created.game,
+        login_refused,
         tokens: created.seat_tokens,
         dir,
     }
-}
-
-fn read(dir: &Path, ext: &str) -> Vec<String> {
-    let mut out: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == ext))
-        .map(|p| std::fs::read_to_string(p).unwrap())
-        .collect();
-    out.sort();
-    out
 }
 
 #[tokio::test]
@@ -113,38 +165,41 @@ async fn one_provider_plays_seats_of_rival_empires_and_time_moves_on() {
     let s = start("", "max_concurrent: 4\n").await;
     s.wait_for_tick(2).await;
 
-    let prompts = read(&s.calls(), "stdin");
-    assert!(prompts.len() >= 2 * SEATS.len(), "{} runs", prompts.len());
-    // Each run is told exactly one seat's token, and every agent seat got runs.
+    // Runs of the next tick may still be starting.
+    let runs: Vec<_> = s
+        .runs()
+        .into_iter()
+        .filter(|(_, r)| r.end.is_some())
+        .collect();
+    assert!(runs.len() >= 2 * SEATS.len(), "{} runs", runs.len());
+    // Each run is told only its own seat token.
     let mut seen = BTreeSet::new();
-    for p in &prompts {
+    for (_, r) in &runs {
         let held: Vec<&SeatId> = s
             .tokens
             .iter()
-            .filter(|(_, t)| p.contains(t.as_str()))
+            .filter(|(_, t)| r.stdin.contains(t.as_str()))
             .map(|(id, _)| id)
             .collect();
-        assert_eq!(held.len(), 1, "{p}");
-        seen.insert(held[0].as_str().to_owned());
-    }
-    assert_eq!(seen, SEATS.iter().map(|s| s.to_string()).collect());
-    for args in read(&s.calls(), "args") {
-        let a: Vec<&str> = args.lines().collect();
-        let after = |f: &str| a[a.iter().position(|x| *x == f).unwrap() + 1];
+        assert_eq!(held, [&SeatId::from(r.seat.as_str())], "{r:?}");
+        seen.insert(r.seat.clone());
+
+        let after = |f: &str| r.args[r.args.iter().position(|x| x == f).unwrap() + 1].as_str();
         assert_eq!(after("--tools"), "");
         assert!(!after("--allowedTools").contains("wait_for_turn"));
         assert_eq!(after("--model"), "haiku");
-        assert!(a.contains(&"--strict-mcp-config"));
+        assert!(r.args.iter().any(|a| a == "--strict-mcp-config"));
         // Tokens never appear on a command line, where other processes could read them.
-        assert!(!s.tokens.values().any(|t| args.contains(t.as_str())));
+        assert!(
+            !s.tokens
+                .values()
+                .any(|t| r.args.iter().any(|a| a.contains(t)))
+        );
     }
-    // Every run starts in its own empty directory.
-    let cwds = read(&s.calls(), "cwd");
-    let unique: BTreeSet<_> = cwds.iter().collect();
-    assert_eq!(unique.len(), cwds.len());
+    assert_eq!(seen, SEATS.iter().map(|s| s.to_string()).collect());
 
     for seat in SEATS {
-        let tick0 = s.runs().join(seat).join("tick-0.jsonl");
+        let tick0 = s.runs_dir().join(seat).join("tick-0.jsonl");
         let log = std::fs::read_to_string(&tick0).unwrap();
         assert!(log.contains("\"type\":\"result\""), "{seat}: {log}");
     }
@@ -158,20 +213,23 @@ async fn a_run_that_overstays_is_stopped_and_its_turn_ended() {
     assert!(started.elapsed() < Duration::from_secs(10));
     for seat in SEATS {
         // Killed before it could write its closing summary.
-        let log = std::fs::read_to_string(s.runs().join(seat).join("tick-0.jsonl")).unwrap();
+        let log = std::fs::read_to_string(s.runs_dir().join(seat).join("tick-0.jsonl")).unwrap();
         assert!(!log.contains("\"type\":\"result\""), "{seat}: {log}");
     }
 }
 
 #[tokio::test]
 async fn runs_never_exceed_the_concurrency_cap() {
-    let s = start(
-        "mkdir \"$0.lock\" 2>/dev/null || touch \"$0.overlap\"\nsleep 0.2\nrmdir \"$0.lock\"",
-        "max_concurrent: 1\n",
-    )
-    .await;
+    let s = start("sleep 0.2", "max_concurrent: 1\n").await;
     s.wait_for_tick(1).await;
-    assert!(!s.dir.path().join("claude.overlap").exists());
+    let mut spans: Vec<(u128, u128)> = s
+        .runs()
+        .into_iter()
+        .filter_map(|(_, r)| Some((r.start, r.end?)))
+        .collect();
+    spans.sort();
+    assert!(spans.len() >= SEATS.len(), "{spans:?}");
+    assert!(spans.windows(2).all(|w| w[0].1 <= w[1].0), "{spans:?}");
 }
 
 #[tokio::test]
@@ -183,38 +241,53 @@ async fn a_tick_that_closes_on_its_deadline_stops_its_runs_and_none_is_played_tw
     )
     .await;
     s.wait_for_tick(4).await;
+    // A tick's runs share its log, so a seat played twice in one tick shows up there.
     let mut played = BTreeSet::new();
-    for p in read(&s.calls(), "stdin") {
-        let token = s.tokens.values().find(|t| p.contains(t.as_str())).unwrap();
-        let tick = p
-            .split("It is tick ")
-            .nth(1)
-            .and_then(|r| r.split('.').next())
-            .unwrap()
-            .to_owned();
+    for (log, _) in s.runs() {
         assert!(
-            played.insert((token.clone(), tick.clone())),
-            "played twice: {tick}"
+            played.insert(log.clone()),
+            "played twice: {}",
+            log.display()
         );
     }
     // Every seat played, and each run was stopped well before its 60s timeout.
-    assert!(played.len() >= SEATS.len(), "{played:?}");
     for seat in SEATS {
-        assert!(s.runs().join(seat).join("tick-0.jsonl").exists(), "{seat}");
+        assert!(
+            played.contains(&s.runs_dir().join(seat).join("tick-0.jsonl")),
+            "{seat}"
+        );
     }
 }
 
 #[tokio::test]
-async fn runs_get_a_clean_environment_and_private_logs() {
+async fn runs_are_sandboxed_with_only_the_login_and_private_logs() {
     let s = start("", "max_concurrent: 4\n").await;
     s.wait_for_tick(1).await;
-    for env in read(&s.calls(), "env") {
-        assert!(!env.contains("CARGO_"), "{env}");
-        assert!(env.lines().any(|l| l.starts_with("PATH=")));
+    for (_, r) in s.runs().into_iter().filter(|(_, r)| r.end.is_some()) {
+        assert_eq!(r.cwd, "/work", "{r:?}");
+        assert!(!r.env.iter().any(|e| e.contains("CARGO")), "{:?}", r.env);
+        for want in [
+            "HOME=/home/agent",
+            &format!("CLAUDE_CODE_OAUTH_TOKEN={LOGIN}"),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        ] {
+            assert!(r.env.iter().any(|e| e == want), "{want}: {:?}", r.env);
+        }
     }
-    let mode = std::fs::metadata(s.runs()).unwrap().permissions().mode();
+    let mode = std::fs::metadata(s.runs_dir())
+        .unwrap()
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o077, 0, "{mode:o}");
-    let log = s.runs().join("crown").join("tick-0.jsonl");
+    let log = s.runs_dir().join("crown").join("tick-0.jsonl");
     let mode = std::fs::metadata(log).unwrap().permissions().mode();
     assert_eq!(mode & 0o077, 0, "{mode:o}");
+}
+
+#[tokio::test]
+async fn a_refused_login_raises_the_alert_until_a_run_succeeds() {
+    let refused = "echo '{\"type\":\"result\",\"is_error\":true,\"api_error_status\":401}'; exit 0";
+    let s = start(refused, "max_concurrent: 4\n").await;
+    s.wait_for_tick(1).await;
+    assert!(s.login_refused.load(Ordering::Relaxed));
 }

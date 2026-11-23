@@ -10,11 +10,13 @@ pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     DirBuilder::new().recursive(true).mode(0o700).create(path)
 }
 
-pub(crate) fn private_file(path: &Path) -> io::Result<File> {
+/// Opened for writing, replacing its contents or, with `append`, adding to them.
+pub(crate) fn private_file(path: &Path, append: bool) -> io::Result<File> {
     OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
+        .append(append)
+        .truncate(!append)
         .mode(0o600)
         .open(path)
 }

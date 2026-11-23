@@ -9,6 +9,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
   const [log, setLog] = useState<Entry[]>([]);
   const [view, setView] = useState<View>({ kind: "world" });
   const [error, setError] = useState("");
+  const [alert, setAlert] = useState<string | null>(null);
   const last = useRef(0);
   const queue = useRef(Promise.resolve());
 
@@ -17,6 +18,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
     queue.current = queue.current.then(async () => {
       try {
         setO(await api.overview());
+        setAlert(await api.agentsAlert());
         const c = await api.chronicle(last.current);
         last.current = c.last;
         if (c.entries.length) setLog((l) => [...l, ...c.entries]);
@@ -74,6 +76,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
         {nav({ kind: "seats" }, "Agents & access")}
       </nav>
       <main>
+        {alert && <p className="error">{alert}</p>}
         {error && <button className="error" onClick={() => setError("")}>{error}</button>}
         {view.kind === "world" && <Empires o={o} ids={sc.empires.map((e) => e.id)} recent={o.chronicle} />}
         {view.kind === "empire" && <Empires o={o} ids={[view.id]} />}
