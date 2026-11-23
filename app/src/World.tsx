@@ -9,7 +9,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
   const [log, setLog] = useState<Entry[]>([]);
   const [view, setView] = useState<View>({ kind: "world" });
   const [error, setError] = useState("");
-  const [alert, setAlert] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<string[]>([]);
   const last = useRef(0);
   const queue = useRef(Promise.resolve());
 
@@ -18,7 +18,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
     queue.current = queue.current.then(async () => {
       try {
         setO(await api.overview());
-        setAlert(await api.agentsAlert());
+        setAlerts(await api.agentsAlerts());
         const c = await api.chronicle(last.current);
         last.current = c.last;
         if (c.entries.length) setLog((l) => [...l, ...c.entries]);
@@ -76,7 +76,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
         {nav({ kind: "seats" }, "Agents & access")}
       </nav>
       <main>
-        {alert && <p className="error">{alert}</p>}
+        {alerts.map((a) => <p key={a} className="error">{a}</p>)}
         {error && <button className="error" onClick={() => setError("")}>{error}</button>}
         {view.kind === "world" && <Empires o={o} ids={sc.empires.map((e) => e.id)} recent={o.chronicle} />}
         {view.kind === "empire" && <Empires o={o} ids={[view.id]} />}
@@ -308,7 +308,7 @@ function Seats({ opened, o }: { opened: Opened; o: Overview }) {
           {opened.seats.map((s) => (
             <tr key={s.id}>
               <td>{name(s.id)}</td>
-              <td>{s.agent ? "AI (Claude Code)" : "Free for an outside agent; built-in rules until one joins"}</td>
+              <td>{s.agent ? "AI on this machine" : "Free for an outside agent; built-in rules until one joins"}</td>
               <td>{o.ended_turn.includes(s.id) ? "Done this turn" : o.state.joined.includes(s.id) ? "Thinking" : "Not joined yet"}</td>
               <td><Token value={s.token} /></td>
             </tr>

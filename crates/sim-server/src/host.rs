@@ -27,6 +27,8 @@ pub struct Options {
     pub runs: PathBuf,
     /// The token from `claude setup-token` that Claude seats log in with.
     pub claude_token: Option<String>,
+    /// Empire's logged-in Codex home that Codex seats log in from.
+    pub codex_login: Option<PathBuf>,
 }
 
 /// A running world. Dropping it stops its server, scheduler and agents.
@@ -119,6 +121,7 @@ pub async fn host(listener: TcpListener, o: Options) -> Result<Hosted, HostError
                 mcp_url: mcp_url.clone(),
                 log_dir: o.runs,
                 claude_token: o.claude_token,
+                codex_login: o.codex_login,
                 login_refused: Default::default(),
                 bridge: std::env::current_exe()?,
             };

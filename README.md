@@ -27,6 +27,12 @@ cargo run -p sim-server -- login
 
 The token lasts a year. When it expires or is revoked, the server log and the app say so; run both commands again.
 
+To play with Codex instead, log Empire's own Codex home in once, in the browser window it opens. Empire needs the standalone Codex install (`codex` with `codex-code-mode-host` beside it), not an npm one. This login is kept apart from your own Codex and uses your ChatGPT subscription:
+
+```sh
+cargo run -p sim-server -- login codex
+```
+
 Describe the world you want, and let Claude Code write it and play every seat:
 
 ```sh
@@ -54,13 +60,13 @@ cargo run -p sim-server -- run --world rome --scenario scenarios/rome.yaml --tic
 | `--seed N` | Seed for random events. The same seed and the same orders give the same history. |
 | `--bind ADDR` | Listen address (default `127.0.0.1:7878`). |
 | `--prompt TEXT` | Create the world from a description instead of `--scenario`. New databases only. |
-| `--play-all AGENT` | One agent plays every seat but the game master's: `claude` or `claude:<model>`. |
+| `--play-all AGENT` | One agent plays every seat but the game master's: `claude`, `codex`, or either with `:<model>`. |
 | `--agents FILE` | Seats that a local agent CLI plays, and how. See below. |
 | `--allowed-host NAME` | Accept MCP requests addressed to this hostname. Needed when agents connect from another machine. |
 
-Other commands: `sim-server login` saves the Claude login, `sim-server check <scenario>` validates a file, and `sim-server schema` prints the JSON Schema that `schema/scenario.schema.json` holds.
+Other commands: `sim-server login` saves the Claude login, `sim-server login codex` logs Codex in, `sim-server check <scenario>` validates a file, and `sim-server schema` prints the JSON Schema that `schema/scenario.schema.json` holds.
 
-## Let Claude Code play the seats
+## Let Claude Code or Codex play the seats
 
 One subscription can play any number of seats, in one empire or in rival ones. `--play-all claude:haiku` gives every seat the same agent. For a mix, use an agents file; `all` covers every seat it doesn't list, so the same file fits any scenario:
 
@@ -74,13 +80,18 @@ turn_timeout_seconds: 240
 all: { claude: { model: haiku } }
 seats:                     # optional overrides by seat id
   princeps: { claude: { model: sonnet } }
+  parthia: { codex: { effort: low } }
+  armenia: { codex: { local: "http://127.0.0.1:11434/v1", model: "gpt-oss:20b" } }
 ```
 
-Each turn, every listed seat gets a fresh headless `claude -p` run that knows only its own seat token. Seats of rival empires on the same login stay apart, and nothing of yours reaches them:
+A Codex seat with `local` plays on a model server on this machine instead of your ChatGPT login: anything that speaks the OpenAI Responses API, such as Ollama (`http://127.0.0.1:11434/v1`) or LM Studio (`http://127.0.0.1:1234/v1`). It needs no login.
 
-- the run is sandboxed by the operating system with an empty home and an empty working directory. Your files, the world database, the run logs, your own Claude Code settings, history and `CLAUDE.md`, and any git repository around the world are out of its reach. Empire needs the native Claude Code install (`claude install`), not an npm one;
-- it logs in with the `setup-token` login, and Claude Code's non-essential traffic is off, so it never fetches your account profile: your name and email don't reach the model;
-- it has no built-in tools, so no files and no shell, only the world's MCP tools for one turn (`look`, `act`, `rule`, `message`, `note`, `end_turn`). It loads no settings files and keeps no session;
+Each turn, every listed seat gets a fresh headless run (`claude -p` or `codex exec`) that knows only its own seat token. Seats of rival empires on the same login stay apart, and nothing of yours reaches them:
+
+- the run is sandboxed by the operating system with an empty home and an empty working directory. Your files, the world database, the run logs, your own agent settings, history and `CLAUDE.md` or `AGENTS.md`, and any git repository around the world are out of its reach. Empire needs the native Claude Code install (`claude install`), not an npm one;
+- its network reaches only its provider (`api.anthropic.com` for Claude Code, `chatgpt.com` and `auth.openai.com` for Codex), the world's MCP server and its local model server, if it has one. Your local network and every other site are unreachable;
+- it logs in with Empire's own login, never your own. Claude Code's non-essential traffic is off, so it never fetches your account profile: your name and email don't reach the model;
+- it has no built-in tools, so no files and no shell, only the world's MCP tools for one turn (`look`, `act`, `rule`, `message`, `note`, `end_turn`). A Codex run also sees no system programs, so even a command it tried would have nothing to run. It loads no settings files and keeps no session;
 - what a character remembers between turns is its `note`s.
 
 When a run finishes, times out, or its tick closes on the deadline, the runner stops it and ends the seat's turn. Each run's output is added to `<world>.runs/<seat>/tick-<n>.jsonl` beside the world, readable only by you since it holds the seat's token (change the location with `--runs DIR`). Runs queue for `max_concurrent` slots, so keep `ceil(seats / max_concurrent) × turn_timeout_seconds` below `--tick-seconds`; the server warns when it isn't. The game master seat can't be given to the runner yet, because it would rule before the other seats act.

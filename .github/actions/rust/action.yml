@@ -6,6 +6,7 @@ runs:
   using: composite
   steps:
     - name: Install system libraries
+      if: runner.os == 'Linux'
       shell: bash
       run: sudo apt-get update -qq && sudo apt-get install -y -qq libwebkit2gtk-4.1-dev librsvg2-dev
     - name: Install toolchain

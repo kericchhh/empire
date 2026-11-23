@@ -38,50 +38,58 @@ fn root() -> io::Result<PathBuf> {
     Ok(root)
 }
 
-/// How long a copy stays unused before it is dropped. Older versions may still be in use by
-/// another run or another Empire build meanwhile.
-const UNUSED: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long a copy stays unused before it is dropped: another run, or another Empire build,
+/// may be about to mount an older version.
+const UNUSED: Duration = Duration::from_secs(10 * 60);
 
-/// A copy of `program` in the cache, keyed by `slot` and the file's size and time, so a new
-/// version is copied again and an old one dropped once unused. With `whole_dir`, the program's directory
-/// is copied, for agents that ship helpers beside their executable.
-pub(crate) fn stage(slot: &str, program: &Path, whole_dir: bool) -> io::Result<PathBuf> {
-    let m = std::fs::metadata(program)?;
+/// A directory in the cache holding a copy of `program` and of each of its `helpers`, which
+/// must sit beside it. It is keyed by `slot` and every file's size and time, so a new version
+/// is copied again and an old one dropped once unused.
+pub(crate) fn stage(slot: &str, program: &Path, helpers: &[&str]) -> io::Result<PathBuf> {
+    let dir = program
+        .parent()
+        .ok_or_else(|| io::Error::other("an agent program needs a directory"))?;
     let name = program
         .file_name()
         .ok_or_else(|| io::Error::other("an agent program needs a file name"))?;
+    let mut files = vec![program.to_owned()];
+    files.extend(helpers.iter().map(|h| dir.join(h)));
+    let mut key = slot.to_owned();
+    for f in &files {
+        let m = std::fs::metadata(f)
+            .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", f.display())))?;
+        key.push_str(&format!(
+            "-{}-{}",
+            m.len(),
+            m.mtime() * 1_000_000_000 + m.mtime_nsec()
+        ));
+    }
     let root = root()?;
-    let key = format!(
-        "{slot}-{}-{}",
-        m.len(),
-        m.mtime_nsec() + m.mtime() * 1_000_000_000
-    );
     let dest = root.join(&key);
-    if !dest.exists() {
-        let tmp = tempfile::Builder::new()
-            .prefix(".stage-")
-            .tempdir_in(&root)?;
-        let src_dir = program.parent().filter(|_| whole_dir);
-        match src_dir {
-            Some(dir) => {
-                for e in std::fs::read_dir(dir)? {
-                    let p = e?.path();
-                    if p.is_file() {
-                        std::fs::copy(&p, tmp.path().join(p.file_name().expect("listed")))?;
-                    }
-                }
+    for _ in 0..2 {
+        if !dest.exists() {
+            let tmp = tempfile::Builder::new()
+                .prefix(".stage-")
+                .tempdir_in(&root)?;
+            for f in &files {
+                std::fs::copy(f, tmp.path().join(f.file_name().unwrap_or(name)))?;
             }
-            None => {
-                std::fs::copy(program, tmp.path().join(name))?;
+            match std::fs::rename(tmp.path(), &dest) {
+                Ok(()) => std::mem::forget(tmp),
+                Err(_) if dest.exists() => {}
+                Err(e) => return Err(e),
             }
         }
-        match std::fs::rename(tmp.path(), &dest) {
-            Ok(()) => std::mem::forget(tmp),
-            Err(_) if dest.exists() => {}
+        // Another process may prune it in between; then it is copied again.
+        match std::fs::File::open(&dest) {
+            Ok(d) => {
+                d.set_modified(SystemTime::now())?;
+                break;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
         }
     }
-    std::fs::File::open(&dest)?.set_modified(SystemTime::now())?;
     for e in std::fs::read_dir(&root)?.flatten() {
         let n = e.file_name();
         let n = n.to_string_lossy();
@@ -89,11 +97,12 @@ pub(crate) fn stage(slot: &str, program: &Path, whole_dir: bool) -> io::Result<P
             .metadata()
             .and_then(|m| m.modified())
             .is_ok_and(|t| t.elapsed().is_ok_and(|d| d > UNUSED));
-        if n.starts_with(&format!("{slot}-")) && n != key && idle {
+        let ours = n.starts_with(&format!("{slot}-")) || n.starts_with(".stage-");
+        if ours && n != key && idle {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
-    Ok(dest.join(name))
+    Ok(dest)
 }
 
 #[cfg(test)]
@@ -106,22 +115,34 @@ mod tests {
         let p = src.path().join("agent");
         std::fs::write(&p, "v1").unwrap();
         std::fs::write(src.path().join("helper"), "h").unwrap();
+        std::fs::write(src.path().join("unrelated"), "u").unwrap();
         let slot = format!("test-{}", std::process::id());
-        let a = stage(&slot, &p, true).unwrap();
-        assert_eq!(stage(&slot, &p, true).unwrap(), a);
-        assert!(a.with_file_name("helper").exists());
+        let a = stage(&slot, &p, &["helper"]).unwrap();
+        assert_eq!(stage(&slot, &p, &["helper"]).unwrap(), a);
+        let mut copied: Vec<_> = std::fs::read_dir(&a)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        copied.sort();
+        assert_eq!(copied, ["agent", "helper"]);
         let home = std::env::var("HOME").unwrap();
         assert!(!a.starts_with(&home), "{}", a.display());
+        assert!(stage(&slot, &p, &["missing"]).is_err());
         std::fs::write(&p, "v2, longer").unwrap();
-        let b = stage(&slot, &p, false).unwrap();
+        let b = stage(&slot, &p, &[]).unwrap();
         assert_ne!(a, b);
-        assert_eq!(std::fs::read_to_string(&b).unwrap(), "v2, longer");
+        assert_eq!(
+            std::fs::read_to_string(b.join("agent")).unwrap(),
+            "v2, longer"
+        );
         assert!(a.exists(), "a recently used version is kept");
         let long_ago = SystemTime::now() - 2 * UNUSED;
-        let old = std::fs::File::open(a.parent().unwrap()).unwrap();
-        old.set_modified(long_ago).unwrap();
-        stage(&slot, &p, false).unwrap();
+        std::fs::File::open(&a)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        stage(&slot, &p, &[]).unwrap();
         assert!(!a.exists(), "an unused version is dropped");
-        std::fs::remove_dir_all(b.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(b).unwrap();
     }
 }

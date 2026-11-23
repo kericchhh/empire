@@ -69,6 +69,16 @@ jobs:
           pending=$(find . -path ./target -prune -o \( -name '*.snap.new' -o -name '*.pending-snap' \) -print)
           [ -z "$pending" ] || { echo "::error::pending insta snapshots:"; echo "$pending"; exit 1; }
 
+  macos-sandbox:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust
+      - run: cargo test -p sim-runner -p sim-server --locked
+
   doc:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -129,7 +139,7 @@ jobs:
 
   ci-success:
     if: ${{ always() }}
-    needs: [fmt, clippy, test, doc, schema, scenarios, frontend, deny]
+    needs: [fmt, clippy, test, macos-sandbox, doc, schema, scenarios, frontend, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

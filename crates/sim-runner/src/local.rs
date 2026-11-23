@@ -1,10 +1,11 @@
-//! Empire's files on the user's machine: the worlds, and the Claude login seats use. The
-//! desktop app and the headless server share them.
+//! Empire's files on the user's machine: the worlds, and the logins seats use. The desktop
+//! app and the headless server share them.
 //!
-//! Seat runs never see the user's own Claude Code login: it refreshes and rotates its tokens,
-//! which a sandboxed copy would break. They use a long-lived token made with
-//! `claude setup-token` instead, which draws on the same subscription. Empire keeps it in a
-//! file only the user can read, and hands it to each run through its environment.
+//! Seat runs never see the user's own agent logins: those refresh and rotate their tokens,
+//! which a sandboxed copy would break. Claude seats use a long-lived token made with
+//! `claude setup-token`, which draws on the same subscription; Empire keeps it in a file only
+//! the user can read, and hands it to each run through its environment. Codex has no such
+//! token, so Codex seats use a Codex home of Empire's own, logged in once with `codex login`.
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -24,6 +25,11 @@ pub enum LocalError {
          with `sim-server login` or in the app's AI providers"
     )]
     NoClaudeToken,
+    #[error(
+        "Codex is not connected to Empire: run `sim-server login codex`, or connect it in the \
+         app's AI providers"
+    )]
+    NoCodexLogin,
     #[error("that is not a token from `claude setup-token`")]
     BadToken,
     #[error("a world name may not be empty or contain `/`, `\\` or `.`")]
@@ -73,6 +79,42 @@ pub fn save_claude_token(token: &str) -> Result<(), LocalError> {
     write_token(&data_dir()?, token)
 }
 
+/// The logins Empire holds: the Claude token and the logged-in Codex home, each `None` when
+/// that agent is not connected.
+pub fn logins() -> Result<(Option<String>, Option<PathBuf>), LocalError> {
+    Ok((missing(claude_token())?, missing(codex_login())?))
+}
+
+fn missing<T>(r: Result<T, LocalError>) -> Result<Option<T>, LocalError> {
+    match r {
+        Err(LocalError::NoClaudeToken | LocalError::NoCodexLogin) => Ok(None),
+        r => r.map(Some),
+    }
+}
+
+/// Empire's own Codex home, readable only by the user.
+pub fn codex_home() -> Result<PathBuf, LocalError> {
+    let dir = data_dir()?.join("codex");
+    private_dir(&dir).map_err(io(&dir))?;
+    Ok(dir)
+}
+
+/// Empire's Codex home, once it holds a login.
+pub fn codex_login() -> Result<PathBuf, LocalError> {
+    let home = codex_home()?;
+    match home.join("auth.json").is_file() {
+        true => Ok(home),
+        false => Err(LocalError::NoCodexLogin),
+    }
+}
+
+/// `codex login` into Empire's Codex home. It runs outside any sandbox, as the user's own.
+pub fn codex_login_command(codex: &Path) -> Result<std::process::Command, LocalError> {
+    let mut cmd = std::process::Command::new(codex);
+    cmd.arg("login").env("CODEX_HOME", codex_home()?);
+    Ok(cmd)
+}
+
 fn token_file(dir: &Path) -> PathBuf {
     dir.join("claude-token")
 }
@@ -88,8 +130,9 @@ fn read_token(dir: &Path) -> Result<String, LocalError> {
 }
 
 fn write_token(dir: &Path, token: &str) -> Result<(), LocalError> {
-    let token = token.trim();
-    if token.is_empty() || token.contains(|c: char| c.is_whitespace() || c.is_control()) {
+    // A token copied from a terminal picks up the line breaks it was wrapped at.
+    let token: String = token.chars().filter(|c| !c.is_whitespace()).collect();
+    if !token.starts_with("sk-ant-") || token.contains(char::is_control) {
         return Err(LocalError::BadToken);
     }
     let path = token_file(dir);
@@ -114,7 +157,7 @@ mod tests {
         let file = token_file(dir.path());
         std::fs::write(&file, "old").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        write_token(dir.path(), "  sk-ant-oat01-abc\n").unwrap();
+        write_token(dir.path(), "  sk-ant-oat01-a\nbc \n").unwrap();
         assert_eq!(read_token(dir.path()).unwrap(), "sk-ant-oat01-abc");
         let mode = std::fs::metadata(&file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
@@ -123,7 +166,7 @@ mod tests {
     #[test]
     fn pasted_junk_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        for bad in ["", "   ", "two words", "a\u{7}b"] {
+        for bad in ["", "   ", "not a token", "sk-ant-a\u{7}b"] {
             assert!(matches!(
                 write_token(dir.path(), bad),
                 Err(LocalError::BadToken)

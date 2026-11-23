@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sim_core::perceive::{Sight, describe};
 use sim_core::{Effect, EmpireId, SeatId};
 use sim_runner::{AgentConfig, AuthorJob, RunnerConfig};
-use sim_runner::{claude_token, world_db, worlds_dir};
+use sim_runner::{claude_token, codex_login, world_db, worlds_dir};
 use sim_server::game::{Config, Overview, TurnView};
 use sim_server::host::{Hosted, Options, host};
 use tauri::{AppHandle, Emitter, State};
@@ -89,7 +89,9 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
         _ if db.exists() => return Err(format!("a world `{}` already exists", req.name)),
         Source::File(p) => Some(std::fs::read_to_string(p).map_err(err)?),
         Source::Prompt { text, author } => {
-            let AgentConfig::Claude(agent) = parse(author)?;
+            let AgentConfig::Claude(agent) = parse(author)? else {
+                return Err("only Claude Code writes worlds for now".into());
+            };
             let a = sim_runner::author(&AuthorJob {
                 agent: &agent,
                 login: &claude_token().map_err(err)?,
@@ -116,6 +118,7 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
             })
         })
         .transpose()?;
+    let (claude_token, codex_login) = sim_runner::logins().map_err(err)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(err)?;
@@ -130,10 +133,8 @@ async fn open_world(app: AppHandle, state: State<'_, App>, req: OpenWorld) -> Re
                 autoplay: req.autoplay,
             },
             allowed_hosts: vec![],
-            claude_token: agents
-                .as_ref()
-                .map(|_| claude_token().map_err(err))
-                .transpose()?,
+            claude_token,
+            codex_login,
             agents,
             runs,
         },
@@ -191,14 +192,14 @@ async fn overview(state: State<'_, App>) -> Res<Overview> {
     with(&state, async |h| Ok(h.game.overview().await)).await
 }
 
-/// A problem the user must fix for agents to keep playing, if there is one.
+/// Problems the user must fix for agents to keep playing.
 #[tauri::command]
-async fn agents_alert(state: State<'_, App>) -> Res<Option<&'static str>> {
+async fn agents_alerts(state: State<'_, App>) -> Res<Vec<&'static str>> {
     with(&state, async |h| {
         Ok(h.agents
             .as_ref()
-            .filter(|p| p.login_refused.load(std::sync::atomic::Ordering::Relaxed))
-            .map(|_| sim_runner::claude::LOGIN_REFUSED))
+            .map(|p| p.login_refused.alerts())
+            .unwrap_or_default())
     })
     .await
 }
@@ -288,32 +289,63 @@ async fn advance_tick(state: State<'_, App>) -> Res<u64> {
     .await
 }
 
-/// Whether Claude Code is installed, whether Empire holds a login for it, and why agent runs
-/// cannot be sandboxed on this machine, if they cannot. Runs no model.
+/// Which agent CLIs are installed and connected to Empire, and why agent runs cannot be
+/// sandboxed on this machine, if they cannot. Runs no model.
 #[derive(Serialize)]
-struct ClaudeStatus {
-    version: Option<String>,
-    connected: bool,
+struct Providers {
+    claude: Provider,
+    codex: Provider,
     sandbox_problem: Option<String>,
 }
 
-#[tauri::command]
-async fn claude_status() -> ClaudeStatus {
+#[derive(Serialize)]
+struct Provider {
+    version: Option<String>,
+    connected: bool,
+}
+
+async fn version(program: &str) -> Option<String> {
     // A stalled CLI must not leave Providers checking forever.
-    let out = tokio::process::Command::new("claude")
+    let out = tokio::process::Command::new(program)
         .arg("--version")
         .kill_on_drop(true)
         .output();
-    let version = tokio::time::timeout(Duration::from_secs(10), out)
+    tokio::time::timeout(Duration::from_secs(10), out)
         .await
         .ok()
         .and_then(Result::ok)
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    ClaudeStatus {
-        version,
-        connected: claude_token().is_ok(),
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
+#[tauri::command]
+async fn providers() -> Providers {
+    let (claude, codex) = tokio::join!(version("claude"), version("codex"));
+    Providers {
+        claude: Provider {
+            version: claude,
+            connected: claude_token().is_ok(),
+        },
+        codex: Provider {
+            version: codex,
+            connected: codex_login().is_ok(),
+        },
         sandbox_problem: sim_runner::check_sandbox().err().map(|e| e.to_string()),
+    }
+}
+
+/// Log Empire's own Codex home in with `codex login`, which opens the browser.
+#[tauri::command]
+async fn connect_codex() -> Res<()> {
+    let cmd = sim_runner::codex_login_command(std::path::Path::new("codex")).map_err(err)?;
+    let status = tokio::process::Command::from(cmd)
+        .kill_on_drop(true)
+        .status();
+    match tokio::time::timeout(Duration::from_secs(600), status).await {
+        Ok(Ok(s)) if s.success() => Ok(()),
+        Ok(Ok(_)) => Err("`codex login` did not finish the login".into()),
+        Ok(Err(e)) => Err(err(e)),
+        Err(_) => Err("the Codex login timed out".into()),
     }
 }
 
@@ -342,9 +374,10 @@ fn main() {
             chronicle,
             intervene,
             advance_tick,
-            claude_status,
+            providers,
             save_claude_token,
-            agents_alert
+            connect_codex,
+            agents_alerts
         ])
         .run(tauri::generate_context!())
         .expect("the app window could not start");

@@ -35,24 +35,34 @@ impl Default for RunnerConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentConfig {
-    /// Claude Code, run headless with `claude -p` on the user's own login.
+    /// Claude Code, run headless with `claude -p` on the user's own subscription.
     Claude(ClaudeConfig),
+    /// Codex, run headless with `codex exec` on the user's own subscription, or on a model
+    /// server on this machine.
+    Codex(CodexConfig),
 }
 
 impl std::str::FromStr for AgentConfig {
     type Err = ConfigError;
 
-    /// `claude` or `claude:<model>`, as the command line takes it.
+    /// `claude`, `codex`, or either with `:<model>`, as the command line takes it.
     fn from_str(s: &str) -> Result<Self, ConfigError> {
         let (kind, model) = s.split_once(':').unwrap_or((s, ""));
+        let model = Some(model.to_owned()).filter(|m| !m.is_empty());
         match kind {
             "claude" => Ok(Self::Claude(ClaudeConfig {
-                model: Some(model.to_owned()).filter(|m| !m.is_empty()),
+                model,
                 effort: None,
                 command: default_claude(),
             })),
+            "codex" => Ok(Self::Codex(CodexConfig {
+                model,
+                effort: None,
+                command: default_codex(),
+                local: None,
+            })),
             other => Err(ConfigError::Invalid(format!(
-                "unknown agent `{other}`: expected `claude` or `claude:<model>`"
+                "unknown agent `{other}`: expected `claude`, `codex`, or either with `:<model>`"
             ))),
         }
     }
@@ -72,6 +82,26 @@ pub struct ClaudeConfig {
 
 fn default_claude() -> PathBuf {
     PathBuf::from("claude")
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexConfig {
+    /// A model name. Default: the CLI's.
+    pub model: Option<String>,
+    /// `minimal`, `low`, `medium`, `high` or `xhigh`. Default: the CLI's.
+    pub effort: Option<String>,
+    /// The executable to launch.
+    #[serde(default = "default_codex")]
+    pub command: PathBuf,
+    /// A model server on this machine that speaks the OpenAI Responses API, used instead of
+    /// the user's ChatGPT login: Ollama at `http://127.0.0.1:11434/v1`, LM Studio at
+    /// `http://127.0.0.1:1234/v1`.
+    pub local: Option<String>,
+}
+
+fn default_codex() -> PathBuf {
+    PathBuf::from("codex")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -101,6 +131,14 @@ impl RunnerConfig {
         ] {
             if bad {
                 return Err(ConfigError::Invalid(problem.into()));
+            }
+        }
+        for a in c.seats.values().chain(&c.all) {
+            if let AgentConfig::Codex(CodexConfig {
+                local: Some(url), ..
+            }) = a
+            {
+                crate::net::loopback(url).map_err(|e| ConfigError::Invalid(e.to_string()))?;
             }
         }
         Ok(c)
@@ -133,9 +171,13 @@ mod tests {
         .unwrap();
         assert_eq!(c.max_concurrent, 2);
         assert_eq!(c.turn_timeout(), Duration::from_secs(240));
-        let AgentConfig::Claude(rome) = &c.seats[&SeatId::from("princeps")];
+        let AgentConfig::Claude(rome) = &c.seats[&SeatId::from("princeps")] else {
+            panic!()
+        };
         assert_eq!(rome.model.as_deref(), Some("sonnet"));
-        let AgentConfig::Claude(parthia) = &c.seats[&SeatId::from("parthia")];
+        let AgentConfig::Claude(parthia) = &c.seats[&SeatId::from("parthia")] else {
+            panic!()
+        };
         assert_eq!(parthia.command, PathBuf::from("claude"));
     }
 
@@ -148,9 +190,9 @@ mod tests {
         let ids: Vec<SeatId> = ["a", "b", "c"].map(SeatId::from).into();
         c.resolve(&ids);
         assert_eq!(c.seats.len(), 3);
-        let model = |s: &str| {
-            let AgentConfig::Claude(a) = &c.seats[&SeatId::from(s)];
-            a.model.clone()
+        let model = |s: &str| match &c.seats[&SeatId::from(s)] {
+            AgentConfig::Claude(a) => a.model.clone(),
+            AgentConfig::Codex(a) => a.model.clone(),
         };
         assert_eq!(model("a").as_deref(), Some("opus"));
         assert_eq!(model("c").as_deref(), Some("haiku"));
@@ -160,11 +202,26 @@ mod tests {
 
     #[test]
     fn the_command_line_names_an_agent_and_a_model() {
-        let AgentConfig::Claude(c) = "claude:sonnet".parse().unwrap();
+        let Ok(AgentConfig::Claude(c)) = "claude:sonnet".parse() else {
+            panic!()
+        };
         assert_eq!(c.model.as_deref(), Some("sonnet"));
-        let AgentConfig::Claude(c) = "claude".parse().unwrap();
+        let Ok(AgentConfig::Claude(c)) = "claude".parse() else {
+            panic!()
+        };
         assert_eq!(c.model, None);
+        let Ok(AgentConfig::Codex(c)) = "codex:gpt-5.5".parse() else {
+            panic!()
+        };
+        assert_eq!((c.model.as_deref(), c.local), (Some("gpt-5.5"), None));
         assert!("gpt:4".parse::<AgentConfig>().is_err());
+    }
+
+    #[test]
+    fn a_local_model_server_must_be_on_this_machine() {
+        let yaml = |url: &str| format!("seats:\n  a: {{ codex: {{ local: '{url}' }} }}\n");
+        assert!(RunnerConfig::from_yaml(&yaml("http://127.0.0.1:11434/v1")).is_ok());
+        assert!(RunnerConfig::from_yaml(&yaml("http://192.168.1.5:11434/v1")).is_err());
     }
 
     #[test]

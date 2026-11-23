@@ -10,6 +10,7 @@ compile_error!("Empire runs on Linux and macOS only.");
 
 pub mod author;
 pub mod claude;
+pub mod codex;
 pub mod config;
 mod fs;
 mod local;
@@ -17,10 +18,14 @@ mod net;
 pub mod runner;
 mod sandbox;
 mod stage;
+pub mod turn;
 
 pub use author::{AuthorError, AuthorJob, Authored, author};
-pub use config::{AgentConfig, ClaudeConfig, ConfigError, RunnerConfig};
-pub use local::{LocalError, claude_token, save_claude_token, world_db, worlds_dir};
+pub use config::{AgentConfig, ClaudeConfig, CodexConfig, ConfigError, RunnerConfig};
+pub use local::{
+    LocalError, claude_token, codex_login, codex_login_command, logins, save_claude_token,
+    world_db, worlds_dir,
+};
 pub use net::bridge_if_asked;
 pub use runner::{Plan, PlanError, run};
 pub use sandbox::{SandboxError, check as check_sandbox};

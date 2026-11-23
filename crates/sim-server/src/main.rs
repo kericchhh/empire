@@ -41,13 +41,22 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         attempts: u32,
     },
-    /// Connect Claude Code to Empire: run `claude setup-token`, then paste the token it prints.
-    /// Seats and authors log in with it, on your subscription, inside their sandbox.
-    Login,
+    /// Connect an agent CLI to Empire, on your own subscription. For Claude Code, run
+    /// `claude setup-token` first and paste the token it prints; Codex opens its own login.
+    Login {
+        #[arg(value_enum, default_value = "claude")]
+        agent: Provider,
+    },
     /// Print the JSON Schema for scenario files.
     Schema,
     /// Validate a scenario file.
     Check { scenario: PathBuf },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Provider {
+    Claude,
+    Codex,
 }
 
 #[derive(clap::Args)]
@@ -104,7 +113,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match Cli::parse().command {
-        Command::Login => {
+        Command::Login {
+            agent: Provider::Codex,
+        } => {
+            let status = sim_runner::codex_login_command(Path::new("codex"))?
+                .status()
+                .context("starting `codex`")?;
+            anyhow::ensure!(status.success(), "`codex login` failed");
+            println!("Codex seats now log in as this account.");
+        }
+        Command::Login {
+            agent: Provider::Claude,
+        } => {
             println!("Paste the token `claude setup-token` printed (it won't show):");
             let echo = |on: bool| {
                 if std::io::stdin().is_terminal() {
@@ -161,10 +181,7 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
     if let Some(all) = a.play_all {
         agents.get_or_insert_with(RunnerConfig::default).all = Some(all);
     }
-    let claude_token = agents
-        .as_ref()
-        .map(|_| sim_runner::claude_token())
-        .transpose()?;
+    let (claude_token, codex_login) = sim_runner::logins()?;
     let runs = a.runs.unwrap_or_else(|| db.with_extension("runs"));
     // Bind first, so a busy port fails before any agent is paid to write a world.
     let listener = tokio::net::TcpListener::bind(a.bind)
@@ -189,6 +206,7 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
             agents,
             runs,
             claude_token,
+            codex_login,
         },
     )
     .await?;
@@ -269,7 +287,9 @@ async fn write_scenario(
     log_dir: &Path,
     attempts: u32,
 ) -> anyhow::Result<String> {
-    let AgentConfig::Claude(agent) = author;
+    let AgentConfig::Claude(agent) = author else {
+        anyhow::bail!("only Claude Code writes scenarios for now");
+    };
     let login = sim_runner::claude_token()?;
     println!("Writing a scenario with your agent (this takes a minute or two)...");
     let a = sim_runner::author(&AuthorJob {
@@ -307,7 +327,15 @@ mod tests {
         assert!(parse("sim-server run --world rome --db rome.db").is_err());
         assert!(matches!(
             parse("sim-server login").unwrap().command,
-            Command::Login
+            Command::Login {
+                agent: Provider::Claude
+            }
+        ));
+        assert!(matches!(
+            parse("sim-server login codex").unwrap().command,
+            Command::Login {
+                agent: Provider::Codex
+            }
         ));
     }
 }
