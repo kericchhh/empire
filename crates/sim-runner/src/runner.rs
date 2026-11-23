@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, ClientConfig};
@@ -37,6 +38,10 @@ pub struct Plan {
     /// Each run's output lands in `<log_dir>/<seat>/tick-<n>.jsonl`, readable only by the
     /// user, since it holds the seat's token and secrets.
     pub log_dir: PathBuf,
+    /// The token from `claude setup-token` that Claude seats log in with.
+    pub claude_token: Option<String>,
+    /// Set while the provider refuses that login, so the user can be told to renew it.
+    pub login_refused: Arc<AtomicBool>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -45,6 +50,8 @@ pub enum PlanError {
     NoToken(SeatId),
     #[error("seat id `{0}` cannot name a log directory")]
     BadSeatId(SeatId),
+    #[error("seat `{0}` is played by Claude Code, which is not connected to Empire")]
+    NoClaudeLogin(SeatId),
 }
 
 /// Whether a seat id can name its log directory. The runner plays only such seats.
@@ -61,6 +68,9 @@ impl Plan {
             }
             if !self.tokens.contains_key(s) {
                 return Err(PlanError::NoToken(s.clone()));
+            }
+            if self.claude_token.is_none() {
+                return Err(PlanError::NoClaudeLogin(s.clone()));
             }
         }
         Ok(())
@@ -156,6 +166,10 @@ async fn session(
 ) -> Result<std::convert::Infallible, SessionError> {
     let token = &plan.tokens[seat];
     let AgentConfig::Claude(agent) = &plan.config.seats[seat];
+    let login = plan
+        .claude_token
+        .as_deref()
+        .expect("validate refuses a Claude seat without a login");
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(plan.mcp_url.clone()),
     );
@@ -197,24 +211,32 @@ async fn session(
                     .log_dir
                     .join(seat.as_str())
                     .join(format!("tick-{tick}.jsonl"));
-                let work = plan.log_dir.join(".work");
                 let closed = tick_closed(&client, &token_arg, tick);
                 match claude::play(
                     agent,
+                    login,
                     &turn,
                     &log,
-                    &work,
                     plan.config.turn_timeout(),
                     closed,
                 )
                 .await
                 {
-                    Ok(r) => tracing::info!(
-                        outcome = ?r.outcome,
-                        turns = r.summary.as_ref().map(|s| s.num_turns),
-                        cost_usd = r.summary.as_ref().map(|s| s.total_cost_usd),
-                        "agent turn finished"
-                    ),
+                    Ok(r) => {
+                        tracing::info!(
+                            outcome = ?r.outcome,
+                            turns = r.summary.as_ref().map(|s| s.num_turns),
+                            cost_usd = r.summary.as_ref().map(|s| s.total_cost_usd),
+                            "agent turn finished"
+                        );
+                        if let Some(s) = &r.summary {
+                            let refused = s.login_refused();
+                            let was = plan.login_refused.swap(refused, Ordering::Relaxed);
+                            if refused && !was {
+                                tracing::error!("{}", claude::LOGIN_REFUSED);
+                            }
+                        }
+                    }
                     Err(e) => tracing::warn!(error = %e, "agent turn failed"),
                 }
             }
@@ -289,6 +311,8 @@ mod tests {
             tokens: BTreeMap::new(),
             mcp_url: "http://x/mcp".into(),
             log_dir: "runs".into(),
+            claude_token: Some("t".into()),
+            login_refused: Default::default(),
         }
     }
 
@@ -298,6 +322,8 @@ mod tests {
         assert_eq!(p.validate(), Err(PlanError::NoToken("a".into())));
         p.tokens.insert("a".into(), "t".into());
         assert_eq!(p.validate(), Ok(()));
+        p.claude_token = None;
+        assert_eq!(p.validate(), Err(PlanError::NoClaudeLogin("a".into())));
         let mut p = plan("seats:\n  '..': { claude: {} }\n");
         p.tokens.insert("..".into(), "t".into());
         assert_eq!(p.validate(), Err(PlanError::BadSeatId("..".into())));

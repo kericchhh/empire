@@ -6,7 +6,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 
 use sim_core::{DefinitionError, Scenario, SeatId, World};
-use sim_runner::{Plan, PlanError, RunnerConfig};
+use sim_runner::{Plan, PlanError, RunnerConfig, SandboxError};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -25,6 +25,8 @@ pub struct Options {
     pub agents: Option<RunnerConfig>,
     /// Where agent run logs go.
     pub runs: PathBuf,
+    /// The token from `claude setup-token` that Claude seats log in with.
+    pub claude_token: Option<String>,
 }
 
 /// A running world. Dropping it stops its server, scheduler and agents.
@@ -54,6 +56,8 @@ pub enum HostError {
     Definition(#[from] DefinitionError),
     #[error(transparent)]
     Plan(#[from] PlanError),
+    #[error(transparent)]
+    Sandbox(#[from] SandboxError),
     #[error("{0}")]
     Agents(String),
     #[error("listener: {0}")]
@@ -114,8 +118,11 @@ pub async fn host(listener: TcpListener, o: Options) -> Result<Hosted, HostError
                 config,
                 mcp_url: mcp_url.clone(),
                 log_dir: o.runs,
+                claude_token: o.claude_token,
+                login_refused: Default::default(),
             };
             plan.validate()?;
+            sim_runner::check_sandbox()?;
             let worst = plan.worst_case_tick();
             if worst >= o.config.tick_deadline {
                 tracing::warn!(

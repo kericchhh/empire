@@ -15,6 +15,7 @@ use sim_core::{Ruleset, Scenario, World};
 
 use crate::claude::{self, Outcome, RunError, Summary};
 use crate::config::ClaudeConfig;
+use crate::sandbox::SandboxError;
 
 /// A scenario an agent wrote and the engine accepted.
 #[derive(Debug, Clone)]
@@ -32,8 +33,12 @@ pub struct Authored {
 pub enum AuthorError {
     #[error(transparent)]
     Run(#[from] RunError),
+    #[error(transparent)]
+    Sandbox(#[from] SandboxError),
     #[error("the agent run {0}")]
     Failed(String),
+    #[error("{}", crate::claude::LOGIN_REFUSED)]
+    LoginRefused,
     #[error("no acceptable scenario after {attempts} attempts; last problem: {last}")]
     Rejected { attempts: u32, last: String },
 }
@@ -42,6 +47,8 @@ pub enum AuthorError {
 #[derive(Debug, Clone)]
 pub struct AuthorJob<'a> {
     pub agent: &'a ClaudeConfig,
+    /// The token from `claude setup-token`.
+    pub login: &'a str,
     /// What the user asked for.
     pub request: &'a str,
     /// Run output and working directories go here.
@@ -106,10 +113,14 @@ fn args(cfg: &ClaudeConfig) -> Vec<std::ffi::OsString> {
     a
 }
 
-/// What a run's output holds: the structured scenario, or why there is none.
+/// What a run's output holds: the structured scenario, or why there is none. Only the last
+/// readable line counts, since a log left by an earlier attempt is appended to.
 fn draft(output: &str) -> Result<Value, String> {
-    let v: Value = serde_json::from_str(output.trim())
-        .map_err(|e| format!("wrote no readable result ({e})"))?;
+    let v: Value = output
+        .lines()
+        .rev()
+        .find_map(|l| serde_json::from_str(l).ok())
+        .ok_or("wrote no readable result")?;
     if v["is_error"] == true {
         return Err(format!(
             "reported an error: {}",
@@ -144,7 +155,7 @@ pub fn check(draft: &Value) -> Result<(String, World), String> {
 /// the reason to the next attempt.
 pub async fn author(job: &AuthorJob<'_>) -> Result<Authored, AuthorError> {
     let rules = Ruleset::standard();
-    let work = job.log_dir.join(".work");
+    crate::sandbox::check()?;
     let mut rejected: Option<(String, String)> = None;
     let mut runs = Vec::new();
     let attempts = job.attempts.max(1);
@@ -157,16 +168,20 @@ pub async fn author(job: &AuthorJob<'_>) -> Result<Authored, AuthorError> {
         let log = job.log_dir.join(format!("author-{attempt}.json"));
         let outcome = claude::launch(
             job.agent,
+            job.login,
             args(job.agent),
             &input,
             &log,
-            &work,
             job.timeout,
             future::pending(),
         )
         .await?;
         let output = tokio::fs::read_to_string(&log).await.unwrap_or_default();
-        runs.push(claude::summary(&output));
+        let summary = claude::summary(&output);
+        if summary.as_ref().is_some_and(Summary::login_refused) {
+            return Err(AuthorError::LoginRefused);
+        }
+        runs.push(summary);
         match outcome {
             Outcome::Exited(Some(0)) => {}
             Outcome::TimedOut => return Err(AuthorError::Failed("timed out".into())),
@@ -262,6 +277,8 @@ mod tests {
         assert!(draft("{\"type\":\"result\",\"result\":\"hi\"}").is_err());
         assert!(draft("{\"type\":\"result\",\"is_error\":true,\"result\":\"limit\"}").is_err());
         assert!(draft("not json").is_err());
+        let after_a_cut_off_run = "{\"type\":\"res\n{\"structured_output\":{\"name\":\"x\"}}";
+        assert_eq!(draft(after_a_cut_off_run).unwrap()["name"], "x");
         let ok = draft("{\"type\":\"result\",\"structured_output\":{\"name\":\"x\"}}").unwrap();
         assert_eq!(ok["name"], "x");
     }

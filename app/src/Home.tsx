@@ -25,7 +25,7 @@ export function Home({ onOpen }: { onOpen: (w: Opened) => void }) {
     check();
     void api.listWorlds().then(setSaved, (e) => setError(String(e)));
   }, []);
-  const ready = !!claude?.logged_in;
+  const ready = !!claude?.version && claude.connected && !claude.sandbox_problem;
   // btop-style hotkeys: 1, 2 and 3 switch tabs unless you are typing; Escape leaves a field.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -138,7 +138,7 @@ export function Home({ onOpen }: { onOpen: (w: Opened) => void }) {
             {error && <button className="error" onClick={() => setError("")}>{error}</button>}
             <button className="strip" onClick={() => setTab("providers")}>
               <i className={claude === null ? "dot" : ready ? "dot on" : "dot off"} />
-              {claude === null ? "Checking Claude Code" : ready ? `Claude Code ${claude.version?.split(" ")[0]} · ${claude.plan ?? claude.auth_method}` : "No AI provider connected"}
+              {claude === null ? "Checking Claude Code" : ready ? `Claude Code ${claude.version?.split(" ")[0]}` : "No AI provider connected"}
             </button>
           </div>
         </div></div>
@@ -200,24 +200,41 @@ function Players({ s, set, ready }: { s: S; set: Setter; ready: boolean }) {
 }
 
 function Providers({ claude, recheck }: { claude: ClaudeStatus | null; recheck: () => void }) {
-  const state = claude === null ? "Checking" : !claude.version ? "Not installed" : claude.logged_in ? "Connected" : "Not logged in";
+  const [token, setToken] = useState("");
+  const [problem, setProblem] = useState("");
+  const state = claude === null ? "Checking" : !claude.version ? "Not installed" : claude.sandbox_problem ? "Cannot be sandboxed" : claude.connected ? "Connected" : "Not connected";
+  const save = async () => {
+    setProblem("");
+    try {
+      await api.saveClaudeToken(token);
+      setToken("");
+      recheck();
+    } catch (e) {
+      setProblem(String(e));
+    }
+  };
   return (
     <>
-      <p className="hint">Empire never talks to an AI service itself and stores no keys. Each character's AI runs as its own sealed session of an AI tool you have installed, on your own account.</p>
+      <p className="hint">Empire never talks to an AI service itself. Each character's AI runs as its own sealed session of an AI tool you have installed, on your own subscription, and sees none of your files, settings or account details.</p>
       <fieldset className="box">
         <legend>claude code <span className={state === "Connected" ? "tag on" : "tag"}>{state}</span></legend>
         {claude?.version && (
           <dl className="facts">
             <dt>Version</dt><dd>{claude.version.split(" ")[0]}</dd>
-            {claude.logged_in && <><dt>Login</dt><dd>{claude.auth_method}</dd><dt>Plan</dt><dd>{claude.plan ?? "n/a"}</dd></>}
             <dt>Models</dt><dd>{MODELS.slice(1).map(([, l]) => l).join(", ")}</dd>
           </dl>
         )}
-        {claude && !claude.logged_in && (
-          <p className="hint">
-            {claude.version ? "Log in from a terminal with " : "Install Claude Code, then log in from a terminal with "}
-            <code>claude auth login</code>, then check again.
-          </p>
+        {claude && !claude.version && <p className="hint">Install Claude Code, then check again.</p>}
+        {claude?.sandbox_problem && <p className="hint">{claude.sandbox_problem}</p>}
+        {claude?.version && (
+          <>
+            <p className="hint">
+              {claude.connected ? "To replace the login, " : "To connect it, "}run <code>claude setup-token</code> in a terminal and paste the token it prints. It uses your Claude subscription and stays in a file only you can read.
+            </p>
+            <Field label="Token"><input type="password" value={token} autoComplete="off" onChange={(e) => setToken(e.target.value)} /></Field>
+            <button disabled={!token.trim()} onClick={() => void save()}>Save</button>
+            {problem && <p className="hint">{problem}</p>}
+          </>
         )}
         <button onClick={recheck}>Check again</button>
       </fieldset>

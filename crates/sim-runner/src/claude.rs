@@ -2,15 +2,16 @@
 //!
 //! Several seats of rival empires may run on the same login, so every run is sealed off from
 //! the machine and from the other seats:
-//! - no built-in tools (`--tools ""`), so it cannot read files, such as the world database or
-//!   the run logs, or run commands;
-//! - only the game's MCP server (`--strict-mcp-config`), and of its tools only those for one
-//!   turn: no `join` or `wait_for_turn`, so a run cannot drift into the next tick;
+//! - an OS sandbox ([`crate::sandbox`]) with an empty home and working directory, so the run
+//!   sees none of the user's files, settings, history or git repositories;
+//! - no built-in tools (`--tools ""`), and of the MCP servers only the game's
+//!   (`--strict-mcp-config`), with only the tools of one turn: no `join` or `wait_for_turn`,
+//!   so a run cannot drift into the next tick;
 //! - no settings files, slash commands or saved session (`--restricted`,
-//!   `--disable-slash-commands`, `--no-session-persistence`), so nothing carries over between
-//!   runs. The user's global `CLAUDE.md` may still load; it is the same for every seat;
-//! - a fresh, empty working directory inside the runner's private directory;
-//! - a cleared environment with only what the CLI needs to find the user's login;
+//!   `--disable-slash-commands`, `--no-session-persistence`);
+//! - the login from `claude setup-token`, and no non-essential traffic, which also keeps
+//!   Claude Code from fetching the account's profile, so the user's name and email never
+//!   reach the model;
 //! - the seat token on stdin, never on the command line where other processes could read it.
 
 use std::ffi::OsString;
@@ -22,10 +23,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use sim_core::{SeatId, Tick};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
 use crate::config::ClaudeConfig;
 use crate::fs::{private_dir, private_file};
+use crate::sandbox;
 
 /// What the runner knows about the turn it launches an agent for.
 #[derive(Debug, Clone)]
@@ -67,6 +68,20 @@ pub struct Summary {
     /// What the run would cost at API prices. On a subscription it is a measure of usage.
     #[serde(default)]
     pub total_cost_usd: f64,
+    /// The HTTP status of the provider error that ended the run, if one did.
+    #[serde(default)]
+    pub api_error_status: Option<u16>,
+}
+
+/// What to tell the user when the provider refuses the saved login.
+pub const LOGIN_REFUSED: &str = "Claude Code refused Empire's login (expired or revoked): run \
+     `claude setup-token` again and save the new token";
+
+impl Summary {
+    /// Whether the provider refused the login, so every run will fail until it is replaced.
+    pub fn login_refused(&self) -> bool {
+        matches!(self.api_error_status, Some(401 | 403))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,25 +101,6 @@ const SERVER: &str = "empire";
 /// The tools one turn needs. `join` and `wait_for_turn` belong to the runner.
 const TURN_TOOLS: [&str; 6] = ["look", "act", "rule", "message", "note", "end_turn"];
 const RUNNER_TOOLS: [&str; 2] = ["join", "wait_for_turn"];
-
-/// Environment variables a run keeps. Everything else, such as `ANTHROPIC_API_KEY` (which
-/// would bill the API instead of the user's subscription) or the variables of a Claude Code
-/// session the server was started from, is dropped.
-const KEEP_ENV: [&str; 13] = [
-    "HOME",
-    "PATH",
-    "USER",
-    "LOGNAME",
-    "LANG",
-    "LC_ALL",
-    "TERM",
-    "TMPDIR",
-    "CLAUDE_CONFIG_DIR",
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY",
-    "SSL_CERT_FILE",
-];
 
 fn tools(names: &[&str]) -> String {
     names
@@ -165,14 +161,14 @@ pub fn prompt(turn: &Turn) -> String {
 /// stderr next to it. The run is killed at `timeout`, or as soon as `stop` completes.
 pub async fn play(
     cfg: &ClaudeConfig,
+    login: &str,
     turn: &Turn<'_>,
     log: &Path,
-    work: &Path,
     timeout: Duration,
     stop: impl Future<Output = ()>,
 ) -> Result<RunReport, RunError> {
     let args = args(cfg, turn.mcp_url);
-    let outcome = launch(cfg, args, &prompt(turn), log, work, timeout, stop).await?;
+    let outcome = launch(cfg, login, args, &prompt(turn), log, timeout, stop).await?;
     let summary = summary(&tokio::fs::read_to_string(log).await.unwrap_or_default());
     Ok(RunReport { outcome, summary })
 }
@@ -204,40 +200,42 @@ pub(crate) fn sealed_args(cfg: &ClaudeConfig, output_format: &str) -> Vec<OsStri
     a
 }
 
-/// Launch the CLI in a fresh directory under `work` with a cleared environment, `input` on
-/// stdin, stdout to `log` and stderr next to it. Killed at `timeout` or when `stop` completes.
+/// Launch the CLI in a fresh sandbox, logged in with `login`, with `input` on
+/// stdin, stdout appended to `log` and stderr next to it. Killed at `timeout` or when `stop`
+/// completes.
 pub(crate) async fn launch(
     cfg: &ClaudeConfig,
+    login: &str,
     args: Vec<OsString>,
     input: &str,
     log: &Path,
-    work: &Path,
     timeout: Duration,
     stop: impl Future<Output = ()>,
 ) -> Result<Outcome, RunError> {
-    private_dir(work)?;
-    let workdir = tempfile::Builder::new().prefix("run-").tempdir_in(work)?;
     if let Some(dir) = log.parent() {
         private_dir(dir)?;
     }
-    let stdout = private_file(log)?;
-    let stderr = private_file(&log.with_extension("stderr.log"))?;
-    let mut cmd = Command::new(&cfg.command);
+    let stdout = private_file(log, true)?;
+    let stderr = private_file(&log.with_extension("stderr.log"), true)?;
+    let spawn = |source| RunError::Spawn {
+        command: cfg.command.display().to_string(),
+        source,
+    };
+    let mut run = sandbox::command(
+        &cfg.command,
+        &[
+            ("CLAUDE_CODE_OAUTH_TOKEN", login),
+            ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+        ],
+    )
+    .map_err(spawn)?;
+    let cmd = &mut run.cmd;
     cmd.args(args)
-        .current_dir(workdir.path())
-        .env_clear()
         .stdin(Stdio::piped())
         .stdout(stdout)
         .stderr(stderr)
         .kill_on_drop(true);
-    cmd.envs(std::env::vars_os().filter(|(k, _)| {
-        let k = k.to_string_lossy();
-        KEEP_ENV.contains(&&*k) || k.starts_with("XDG_")
-    }));
-    let mut child = cmd.spawn().map_err(|source| RunError::Spawn {
-        command: cfg.command.display().to_string(),
-        source,
-    })?;
+    let mut child = cmd.spawn().map_err(spawn)?;
     let mut stdin = child
         .stdin
         .take()
@@ -353,9 +351,12 @@ mod tests {
                 is_error: false,
                 num_turns: 4,
                 duration_ms: 900,
-                total_cost_usd: 0.01
+                total_cost_usd: 0.01,
+                api_error_status: None,
             })
         );
+        let refused = "{\"type\":\"result\",\"is_error\":true,\"api_error_status\":401}";
+        assert!(summary(refused).unwrap().login_refused());
         assert_eq!(summary("{\"type\":\"assistant\"}"), None);
     }
 }

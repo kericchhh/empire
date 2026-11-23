@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -40,6 +41,9 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         attempts: u32,
     },
+    /// Connect Claude Code to Empire: run `claude setup-token`, then paste the token it prints.
+    /// Seats and authors log in with it, on your subscription, inside their sandbox.
+    Login,
     /// Print the JSON Schema for scenario files.
     Schema,
     /// Validate a scenario file.
@@ -48,8 +52,12 @@ enum Command {
 
 #[derive(clap::Args)]
 struct RunArgs {
-    #[arg(long)]
-    db: PathBuf,
+    /// The world's name. It lives in Empire's data directory, shared with the desktop app.
+    #[arg(long, required_unless_present = "db")]
+    world: Option<String>,
+    /// A database file of your choosing instead of a named world.
+    #[arg(long, conflicts_with = "world")]
+    db: Option<PathBuf>,
     #[arg(long, conflicts_with = "prompt")]
     scenario: Option<PathBuf>,
     /// Describe the world in your own words; your agent writes the scenario, saved as
@@ -95,6 +103,23 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match Cli::parse().command {
+        Command::Login => {
+            println!("Paste the token `claude setup-token` printed (it won't show):");
+            let echo = |on: bool| {
+                if std::io::stdin().is_terminal() {
+                    let _ = std::process::Command::new("stty")
+                        .arg(if on { "echo" } else { "-echo" })
+                        .status();
+                }
+            };
+            echo(false);
+            let mut token = String::new();
+            let read = std::io::stdin().read_line(&mut token);
+            echo(true);
+            read?;
+            sim_runner::save_claude_token(&token)?;
+            println!("Saved. Claude Code seats now log in with it.");
+        }
         Command::Schema => {
             let schema = schemars::schema_for!(Scenario);
             println!("{}", serde_json::to_string_pretty(&schema)?);
@@ -123,6 +148,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run(a: RunArgs) -> anyhow::Result<()> {
+    let db = match a.db {
+        Some(db) => db,
+        None => sim_runner::world_db(a.world.as_deref().expect("clap requires --world or --db"))?,
+    };
     let mut agents = a
         .agents
         .as_deref()
@@ -131,20 +160,24 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
     if let Some(all) = a.play_all {
         agents.get_or_insert_with(RunnerConfig::default).all = Some(all);
     }
-    let runs = a.runs.unwrap_or_else(|| a.db.with_extension("runs"));
+    let claude_token = agents
+        .as_ref()
+        .map(|_| sim_runner::claude_token())
+        .transpose()?;
+    let runs = a.runs.unwrap_or_else(|| db.with_extension("runs"));
     // Bind first, so a busy port fails before any agent is paid to write a world.
     let listener = tokio::net::TcpListener::bind(a.bind)
         .await
         .with_context(|| format!("binding {}", a.bind))?;
     let scenario = match (&a.scenario, &a.prompt) {
         (Some(p), _) => Some(read(p)?),
-        (None, Some(request)) => Some(prompted_scenario(&a.db, request, &a.author, &runs).await?),
+        (None, Some(request)) => Some(prompted_scenario(&db, request, &a.author, &runs).await?),
         (None, None) => None,
     };
     let h = host(
         listener,
         Options {
-            db: a.db,
+            db,
             scenario,
             seed: a.seed,
             config: Config {
@@ -154,6 +187,7 @@ async fn run(a: RunArgs) -> anyhow::Result<()> {
             allowed_hosts: a.allowed_hosts,
             agents,
             runs,
+            claude_token,
         },
     )
     .await?;
@@ -235,9 +269,11 @@ async fn write_scenario(
     attempts: u32,
 ) -> anyhow::Result<String> {
     let AgentConfig::Claude(agent) = author;
+    let login = sim_runner::claude_token()?;
     println!("Writing a scenario with your agent (this takes a minute or two)...");
     let a = sim_runner::author(&AuthorJob {
         agent,
+        login: &login,
         request,
         log_dir,
         attempts,
@@ -251,4 +287,25 @@ async fn write_scenario(
         if a.attempts == 1 { "" } else { "s" },
     );
     Ok(a.yaml)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &str) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(args.split(' '))
+    }
+
+    #[test]
+    fn a_world_is_named_or_given_as_a_file_but_not_both() {
+        assert!(parse("sim-server run --world rome").is_ok());
+        assert!(parse("sim-server run --db rome.db").is_ok());
+        assert!(parse("sim-server run --scenario x.yaml").is_err());
+        assert!(parse("sim-server run --world rome --db rome.db").is_err());
+        assert!(matches!(
+            parse("sim-server login").unwrap().command,
+            Command::Login
+        ));
+    }
 }

@@ -63,7 +63,8 @@ export type Target =
   | { stat: { region: Id; stat: Id } }
   | { resource: { character: Id; resource: Id } };
 
-export interface ClaudeStatus { version: string | null; logged_in: boolean; auth_method: string | null; plan: string | null }
+/** Whether Claude Code is installed, and whether Empire holds its `claude setup-token` login. */
+export interface ClaudeStatus { version: string | null; connected: boolean; sandbox_problem: string | null }
 /** Claude Code model aliases; "" leaves the choice to the CLI. */
 export const MODELS: [string, string][] = [["", "CLI default"], ["haiku", "Haiku"], ["sonnet", "Sonnet"], ["opus", "Opus"]];
 export const agent = (model: string) => (model ? `claude:${model}` : "claude");
@@ -79,6 +80,8 @@ export const api = {
     invoke<number>("intervene", { title, text, effects, empire }),
   advanceTick: () => invoke<number>("advance_tick"),
   claudeStatus: () => invoke<ClaudeStatus>("claude_status"),
+  saveClaudeToken: (token: string) => invoke<void>("save_claude_token", { token }),
+  agentsAlert: () => invoke<string | null>("agents_alert"),
 };
 
 /** A ruleset or scenario name for an id, falling back to the id itself. */

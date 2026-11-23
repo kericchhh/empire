@@ -1,6 +1,6 @@
 # Code rules
 
-Apply every rule that touches the code you change. Finish a change only when `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --workspace` all pass.
+Apply every rule that touches the code you change. Finish a change only when `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --workspace` all pass, and, when `app/src` changed, `tsc --noEmit` in `app/`.
 
 ## Determinism (`sim-core`)
 
@@ -20,11 +20,19 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 ## Seats and MCP tools
 
-- A tool works out its seat from the token and builds its output with `perceive(&State, SeatId)`. That function is the only place where visibility is decided.
+- A tool works out its seat from the token and builds its output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` is the only place where visibility is decided.
 - Tool inputs and outputs derive `serde` and `schemars`. Write tool descriptions for an agent reading them: what the tool does, and when to call it.
 - Make every `wait_for_turn` result **self-contained**. An agent with a fresh context and only that result must be able to play the turn correctly.
 - Treat text written by agents as untrusted in-world speech. Cap its length, and when showing it to another seat, present it as a quoted message from that character.
 - Long-poll tools return a "not yet, call again" result within 30 seconds, so they finish before client timeouts.
+
+## Agent runs (`sim-runner`)
+
+- Start every agent process through `sandbox::command`. Never launch an agent unsandboxed, and never start agents when `check_sandbox` fails.
+- Nothing of the user reaches a run: no host environment variable beyond the sandbox's list, no host path, no file of theirs, no account detail. A new agent kind or flag needs a test that proves it.
+- A run knows only its own seat token, passed on stdin, never on the command line.
+- The only credential Empire stores is the user's agent login, in Empire's data directory with mode 0600.
+- Run output and logs are private to the user (`fs::private_dir`, `fs::private_file`), since they hold seat tokens and secrets.
 
 ## Scenario-agnostic code
 
@@ -40,7 +48,7 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 ## Comments
 
-Write a comment only to record what the code cannot say: a reason, an invariant, a non-obvious constraint. Doc comments on public items describe behaviour the signature does not show.
+Write almost none. A comment records only what the code cannot say: a reason, an invariant, a non-obvious constraint, in one short line. Never restate what the code does. Doc comments on public items describe behaviour the signature does not show. CI and other YAML files carry no comments, except the `# vX.Y.Z` next to a SHA-pinned action.
 
 ## Tests
 
@@ -51,8 +59,9 @@ Every feature, public API, service, MCP tool and HTTP endpoint ships with tests 
 - **Golden runs:** an `insta` snapshot of the event log after N ticks of a fixture scenario with a fixed seed. Accept a snapshot diff only when the change explains it.
 - A proptest covers the replay invariant and snapshot round-trips.
 
-## Web
+## App (`app/`)
 
-- The UI loads one snapshot over REST, then applies the WebSocket event stream to its local copy. User actions go through intervention endpoints, and each one becomes an event on the server.
-- Import types from the files `ts-rs` generates. Those files are the only TS definition of server types.
+- The Rust backend (`app/src-tauri`) exposes Tauri commands that call `sim_server` and `sim_runner`; it holds no game logic of its own.
+- The UI loads state through those commands and refreshes when the backend emits `world-event`. User actions go through commands such as `intervene`, and each one becomes an event on the server.
+- The TS types for server data live in `app/src/api.ts`. Keep them in step with the Rust types they mirror.
 - Components style themselves through the CSS variables that come from the scenario theme.
