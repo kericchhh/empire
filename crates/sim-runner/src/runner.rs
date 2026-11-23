@@ -42,6 +42,8 @@ pub struct Plan {
     pub claude_token: Option<String>,
     /// Set while the provider refuses that login, so the user can be told to renew it.
     pub login_refused: Arc<AtomicBool>,
+    /// An Empire executable that answers [`crate::bridge_if_asked`].
+    pub bridge: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -215,6 +217,7 @@ async fn session(
                 match claude::play(
                     agent,
                     login,
+                    &plan.bridge,
                     &turn,
                     &log,
                     plan.config.turn_timeout(),
@@ -313,6 +316,7 @@ mod tests {
             log_dir: "runs".into(),
             claude_token: Some("t".into()),
             login_refused: Default::default(),
+            bridge: "bridge".into(),
         }
     }
 

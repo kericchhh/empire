@@ -1,30 +1,22 @@
 //! Every agent run is sealed in an OS sandbox, whatever the agent's own flags promise. A run
-//! sees the system's programs and libraries, its agent's executable, an empty home and an
-//! empty working directory, and the network. It never sees the user's files: not the world
-//! database, the run logs, the user's own agent settings and history, or a repository the
-//! world happens to sit in. Linux uses `bwrap` (bubblewrap), macOS `sandbox-exec`.
-//!
-//! Not yet closed, and harmless only while agents have no tools of their own: the network is
-//! the host's (local services and the LAN included), and on Linux the agent executable's host
-//! path shows in `/proc/self/mountinfo`.
+//! sees the system's programs and libraries, a copy of its agent's executable, an empty home
+//! and an empty working directory, and only the network exits [`net`](crate::net) allows. It
+//! never sees the user's files: not the world database, the run logs, the user's own agent
+//! settings and history, or a repository the world happens to sit in. Linux uses `bwrap`
+//! (bubblewrap), macOS `sandbox-exec`.
 
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tokio::process::Command;
 
-/// Host variables a run keeps: how to reach the network, nothing about the user.
-const PASS_ENV: [&str; 8] = [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "no_proxy",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-];
+use crate::net::{Exits, Gate, Route};
+use crate::stage::stage;
+
+/// Host variables a run keeps. Proxies are the gate's, so the host's are not among them.
+const PASS_ENV: [&str; 2] = ["SSL_CERT_FILE", "SSL_CERT_DIR"];
 
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -33,19 +25,40 @@ const PASS_ENV: [&str; 8] = [
 )]
 pub struct SandboxError(String);
 
-/// A command that runs inside a fresh sandbox. Keep it until the run ends: on macOS it owns
-/// the run's directories, which go with it.
-pub(crate) struct Sandboxed {
-    pub(crate) cmd: Command,
-    _dirs: Option<tempfile::TempDir>,
+/// What to run in a sandbox.
+pub(crate) struct Spec {
+    /// The cache slot for the program's copy.
+    pub(crate) slot: &'static str,
+    /// A bare name is looked up on the host's `PATH`.
+    pub(crate) program: PathBuf,
+    /// Copy the program's whole directory, for agents that ship helpers beside it.
+    pub(crate) whole_dir: bool,
+    pub(crate) env: Vec<(&'static str, String)>,
+    pub(crate) exits: Exits,
+    /// An Empire executable that answers [`crate::bridge_if_asked`].
+    #[cfg_attr(
+        target_os = "macos",
+        expect(dead_code, reason = "macOS runs need no bridge")
+    )]
+    pub(crate) bridge: PathBuf,
 }
 
-/// Sandbox `program` with only `env` and a minimal base environment. A bare name is looked up
-/// on the host's `PATH`.
-pub(crate) fn command(program: &Path, env: &[(&str, &str)]) -> io::Result<Sandboxed> {
-    let (cmd, home, dirs) = platform::command(&resolve(program)?)?;
+/// A command that runs inside a fresh sandbox, and the gate that is its only way out. Keep it
+/// until the run ends.
+pub(crate) struct Sandboxed {
+    pub(crate) cmd: Command,
+    _gate: Gate,
+    _dirs: tempfile::TempDir,
+}
+
+/// Needs a Tokio runtime: the gate runs on it.
+pub(crate) fn command(spec: &Spec) -> io::Result<Sandboxed> {
+    let program = stage(spec.slot, &resolve(&spec.program)?, spec.whole_dir)?;
+    let mut gate = Gate::default();
+    let (cmd, home, proxy, dirs) = platform::command(spec, &program, &mut gate)?;
     let mut cmd = Command::from(cmd);
     let home = home.to_string_lossy().into_owned();
+    let proxy = format!("http://{proxy}");
     cmd.env_clear()
         .envs(std::env::vars_os().filter(|(k, _)| PASS_ENV.iter().any(|p| k == *p)))
         .envs([
@@ -54,16 +67,22 @@ pub(crate) fn command(program: &Path, env: &[(&str, &str)]) -> io::Result<Sandbo
             ("TMPDIR", &format!("{home}/tmp")),
             ("USER", "agent"),
             ("LANG", "C.UTF-8"),
+            ("HTTPS_PROXY", &proxy),
+            ("HTTP_PROXY", &proxy),
+            ("NO_PROXY", "127.0.0.1,localhost,::1"),
         ])
-        .envs(env.iter().copied());
-    Ok(Sandboxed { cmd, _dirs: dirs })
+        .envs(spec.env.iter().map(|(k, v)| (k, v)));
+    Ok(Sandboxed {
+        cmd,
+        _gate: gate,
+        _dirs: dirs,
+    })
 }
 
 /// Whether this machine can sandbox agent runs. Agents are never started unsandboxed.
 pub fn check() -> Result<(), SandboxError> {
     let fail = |e: &dyn std::fmt::Display| SandboxError(e.to_string());
-    let (mut cmd, _, _dirs) =
-        platform::command(Path::new("/usr/bin/true")).map_err(|e| fail(&e))?;
+    let (mut cmd, _dirs) = platform::bare(Path::new("/usr/bin/true")).map_err(|e| fail(&e))?;
     let out = cmd.output().map_err(|e| fail(&e))?;
     if out.status.success() {
         Ok(())
@@ -72,7 +91,7 @@ pub fn check() -> Result<(), SandboxError> {
     }
 }
 
-/// The real file behind `program`, so a symlink in the user's `PATH` cannot point the mount
+/// The real file behind `program`, so a symlink in the user's `PATH` cannot point the copy
 /// elsewhere.
 fn resolve(program: &Path) -> io::Result<PathBuf> {
     let found = if program.components().count() > 1 {
@@ -94,28 +113,32 @@ fn resolve(program: &Path) -> io::Result<PathBuf> {
         .canonicalize()
 }
 
+fn hosts(exits: &Exits) -> Route {
+    Route::Proxy(exits.hosts.iter().cloned().collect::<Arc<[String]>>())
+}
+
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
+    use crate::net::BRIDGE_ARG;
 
-    /// Read-only system paths a program may need: libraries, CA certificates, DNS.
-    const SYSTEM: [&str; 6] = [
+    /// Read-only system paths a program may need: libraries and CA certificates.
+    const SYSTEM: [&str; 5] = [
         "/usr",
-        "/etc/resolv.conf",
         "/etc/ssl",
         "/etc/ca-certificates",
         "/etc/pki",
         "/etc/alternatives",
     ];
 
-    /// Home, working directory and `/tmp` are size-capped memory filesystems that exist only
-    /// inside the sandbox, so no host path names them and nothing is left behind.
-    pub(super) fn command(
-        program: &Path,
-    ) -> io::Result<(std::process::Command, PathBuf, Option<tempfile::TempDir>)> {
+    /// The proxy's address inside a run, which has a network of its own.
+    const PROXY: &str = "127.0.0.1:3128";
+
+    /// No network but loopback, and home, working directory and `/tmp` on size-capped memory
+    /// filesystems that exist only inside the sandbox, so no host path names them.
+    fn base() -> Vec<OsString> {
         let mut a: Vec<OsString> = [
             "--unshare-all",
-            "--share-net",
             "--die-with-parent",
             "--new-session",
             "--hostname",
@@ -148,20 +171,67 @@ mod platform {
                 Err(_) => {}
             }
         }
-        let inside = if program.starts_with("/usr") {
-            program.to_owned()
-        } else {
-            let name = program
-                .file_name()
-                .expect("a canonical file path has a name");
-            let inside = Path::new("/opt/agent").join(name);
-            a.extend(["--ro-bind".into(), program.into(), inside.clone().into()]);
-            inside
+        a.extend(["--chdir".into(), "/work".into()]);
+        a
+    }
+
+    pub(super) fn bare(program: &Path) -> io::Result<(std::process::Command, ())> {
+        let mut cmd = std::process::Command::new("bwrap");
+        cmd.args(base()).arg("--").arg(program);
+        Ok((cmd, ()))
+    }
+
+    /// The gate's sockets live in the user's runtime directory, whose path names no user.
+    fn sockets() -> io::Result<tempfile::TempDir> {
+        let dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(std::env::temp_dir);
+        tempfile::Builder::new()
+            .prefix("empire-run-")
+            .tempdir_in(dir)
+    }
+
+    pub(super) fn command(
+        spec: &Spec,
+        program: &Path,
+        gate: &mut Gate,
+    ) -> io::Result<(std::process::Command, PathBuf, String, tempfile::TempDir)> {
+        let dirs = sockets()?;
+        let mut a = base();
+        let name = program.file_name().expect("a staged program has a name");
+        let agent = Path::new("/opt/agent").join(name);
+        let (from, to) = match program.parent().filter(|_| spec.whole_dir) {
+            Some(dir) => (dir, Path::new("/opt/agent")),
+            None => (program, agent.as_path()),
         };
-        a.extend(["--chdir".into(), "/work".into(), "--".into(), inside.into()]);
+        a.extend(["--ro-bind".into(), from.into(), to.into()]);
+        let bridge = stage("bridge", &resolve(&spec.bridge)?, false)?;
+        a.extend([
+            "--ro-bind".into(),
+            bridge.into(),
+            "/opt/empire/bridge".into(),
+        ]);
+        a.extend(["--bind".into(), dirs.path().into(), "/run/empire".into()]);
+        a.extend(["--".into(), "/opt/empire/bridge".into(), BRIDGE_ARG.into()]);
+        let routes = std::iter::once((PROXY.to_owned(), hosts(&spec.exits))).chain(
+            spec.exits
+                .tunnels
+                .iter()
+                .map(|t| (t.to_string(), Route::Tunnel(*t))),
+        );
+        for (i, (inside, route)) in routes.enumerate() {
+            let sock = format!("{i}.sock");
+            gate.serve(
+                tokio::net::UnixListener::bind(dirs.path().join(&sock))?,
+                route,
+            );
+            a.push(format!("{inside}=/run/empire/{sock}").into());
+        }
+        a.extend(["--".into(), agent.into()]);
         let mut cmd = std::process::Command::new("bwrap");
         cmd.args(a);
-        Ok((cmd, "/home/agent".into(), None))
+        Ok((cmd, "/home/agent".into(), PROXY.into(), dirs))
     }
 }
 
@@ -169,30 +239,38 @@ mod platform {
 mod platform {
     use super::*;
 
-    /// Deny everything, then allow the system, the agent's executable and the run's own
-    /// directories. The user's home is never readable, and of the system services only those
-    /// for DNS, certificates and logging are reachable: not the keychain, user defaults or
+    /// Deny everything, then allow the system, the agent's executable, the run's own
+    /// directories and the gate's and tunnels' loopback ports. Of the system services only
+    /// those for certificates and logging are reachable: not the keychain, user defaults or
     /// the directory service, which would give away the login or the user's name.
-    const PROFILE: &str = r#"(version 1)
+    fn profile(ports: &[u16]) -> String {
+        let net: String = ports
+            .iter()
+            .map(|p| format!("(allow network-outbound (remote ip \"localhost:{p}\"))\n"))
+            .collect();
+        format!(
+            r#"(version 1)
 (deny default)
-(allow process-exec process-fork signal sysctl-read ipc-posix-shm iokit-open network*)
+(allow process-exec process-fork signal sysctl-read ipc-posix-shm iokit-open)
 (deny sysctl-read (sysctl-name "kern.hostname"))
-(allow mach-lookup (global-name "com.apple.dnssd.service" "com.apple.trustd"
-  "com.apple.trustd.agent" "com.apple.SystemConfiguration.configd"
-  "com.apple.SystemConfiguration.DNSConfiguration" "com.apple.logd"
+(allow mach-lookup (global-name "com.apple.trustd" "com.apple.trustd.agent" "com.apple.logd"
   "com.apple.system.logger" "com.apple.system.notification_center"))
 (allow file-read-metadata)
 (allow file-read* (literal "/") (subpath "/usr") (subpath "/bin") (subpath "/System")
   (subpath "/Library") (subpath "/private/etc") (subpath "/private/var/db/timezone")
-  (subpath "/dev") (literal (param "PROGRAM")) (subpath (param "HOME")) (subpath (param "WORK")))
+  (subpath "/dev") (subpath (param "AGENT")) (subpath (param "HOME")) (subpath (param "WORK")))
 (allow file-write* (subpath (param "HOME")) (subpath (param "WORK")) (subpath "/dev"))
-"#;
+{net}"#
+        )
+    }
 
     /// macOS cannot remap paths, so the run's directories live in the system temporary
     /// directory, whose path names no user.
-    pub(super) fn command(
+    fn sandbox(
         program: &Path,
-    ) -> io::Result<(std::process::Command, PathBuf, Option<tempfile::TempDir>)> {
+        agent: &Path,
+        ports: &[u16],
+    ) -> io::Result<(std::process::Command, PathBuf, tempfile::TempDir)> {
         let dirs = tempfile::Builder::new().prefix("empire-run-").tempdir()?;
         let root = dirs.path().canonicalize()?;
         let (home, work) = (root.join("home"), root.join("work"));
@@ -204,14 +282,38 @@ mod platform {
             ["-D".into(), s]
         };
         let mut cmd = std::process::Command::new("/usr/bin/sandbox-exec");
-        cmd.arg("-p")
-            .arg(PROFILE)
-            .args(param("PROGRAM", program))
+        cmd.args(param("AGENT", agent))
             .args(param("HOME", &home))
             .args(param("WORK", &work))
+            .arg("-p")
+            .arg(profile(ports))
             .arg(program)
             .current_dir(&work);
-        Ok((cmd, home, Some(dirs)))
+        Ok((cmd, home, dirs))
+    }
+
+    pub(super) fn bare(program: &Path) -> io::Result<(std::process::Command, tempfile::TempDir)> {
+        let (cmd, _, dirs) = sandbox(program, program, &[])?;
+        Ok((cmd, dirs))
+    }
+
+    pub(super) fn command(
+        spec: &Spec,
+        program: &Path,
+        gate: &mut Gate,
+    ) -> io::Result<(std::process::Command, PathBuf, String, tempfile::TempDir)> {
+        let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+        l.set_nonblocking(true)?;
+        let proxy = l.local_addr()?;
+        gate.serve(tokio::net::TcpListener::from_std(l)?, hosts(&spec.exits));
+        let mut ports = vec![proxy.port()];
+        ports.extend(spec.exits.tunnels.iter().map(|t| t.port()));
+        let agent = program
+            .parent()
+            .filter(|_| spec.whole_dir)
+            .unwrap_or(program);
+        let (cmd, home, dirs) = sandbox(program, agent, &ports)?;
+        Ok((cmd, home, proxy.to_string(), dirs))
     }
 }
 
@@ -220,14 +322,33 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    async fn run(script: &str) -> String {
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// Run `body` sandboxed behind a stand-in bridge that only starts the program.
+    async fn run(body: &str) -> String {
         let host = tempfile::tempdir().unwrap();
         let secret = host.path().join("world.db");
         std::fs::write(&secret, "the hidden state").unwrap();
-        let agent = host.path().join("agent");
-        std::fs::write(&agent, format!("#!/bin/sh\n{script}\ntrue\n")).unwrap();
-        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut run = command(&agent, &[("SEAT_THING", "given")]).unwrap();
+        let agent = script(host.path(), "agent", &format!("{body}\ntrue"));
+        let bridge = script(
+            host.path(),
+            "bridge",
+            "while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"",
+        );
+        let spec = Spec {
+            slot: "test-sandbox",
+            program: agent,
+            whole_dir: false,
+            env: vec![("SEAT_THING", "given".into())],
+            exits: Exits::default(),
+            bridge,
+        };
+        let mut run = command(&spec).unwrap();
         let out = run.cmd.arg(&secret).output().await.unwrap();
         assert!(
             out.status.success(),
@@ -254,7 +375,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_host_path_but_the_agents_shows_in_the_mount_table() {
+    async fn no_host_path_naming_the_user_shows_in_the_mount_table() {
         let out = run("cat /proc/self/mountinfo").await;
         let user = std::env::var("USER").unwrap_or_default();
         for line in out.lines() {
@@ -263,7 +384,7 @@ mod tests {
             if ["/home/agent", "/work", "/tmp"].contains(&at) {
                 assert_eq!(root, "/", "{line}");
             }
-            if !at.starts_with("/opt/agent") && user.len() > 1 {
+            if user.len() > 1 {
                 assert!(!root.contains(&user), "{line}");
             }
         }
@@ -275,6 +396,7 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(&lines[..2], ["/work", "hi"], "{out}");
         assert!(out.contains("SEAT_THING=given") && out.contains("HOME=/home/agent"));
+        assert!(out.contains("HTTPS_PROXY=http://127.0.0.1:3128"), "{out}");
         assert!(!out.contains("CARGO"), "{out}");
     }
 }

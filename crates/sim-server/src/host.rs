@@ -120,6 +120,7 @@ pub async fn host(listener: TcpListener, o: Options) -> Result<Hosted, HostError
                 log_dir: o.runs,
                 claude_token: o.claude_token,
                 login_refused: Default::default(),
+                bridge: std::env::current_exe()?,
             };
             plan.validate()?;
             sim_runner::check_sandbox()?;

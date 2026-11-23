@@ -1,7 +1,7 @@
 //! The author loop against a fake `claude` that returns prepared drafts in turn.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -14,10 +14,10 @@ const TINY: &str = include_str!("../../sim-core/tests/fixtures/tiny.yaml");
 /// loop logs.
 fn fake(dir: &Path, first: &Value, retry: &Value) -> ClaudeConfig {
     let out = |v: &Value| json!({ "type": "result", "is_error": false, "num_turns": 1, "structured_output": v });
-    let path = dir.join("claude");
-    std::fs::write(
-        &path,
-        format!(
+    let path = script(
+        dir,
+        "claude",
+        &format!(
             "#!/bin/sh\n\
              input=$(cat)\n\
              printf '%s\\n' \"$@\" '--stdin--' \"$input\" >&2\n\
@@ -25,14 +25,28 @@ fn fake(dir: &Path, first: &Value, retry: &Value) -> ClaudeConfig {
             first = out(first),
             retry = out(retry),
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     ClaudeConfig {
         model: Some("haiku".into()),
         effort: None,
         command: path,
     }
+}
+
+fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// A stand-in for Empire's bridge that only starts the program.
+fn bridge(dir: &Path) -> PathBuf {
+    script(
+        dir,
+        "bridge",
+        "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"\n",
+    )
 }
 
 /// What the fake recorded on its n-th call: its arguments, and its prompt.
@@ -46,10 +60,11 @@ fn tiny() -> Value {
     serde_yaml_ng::from_str(TINY).unwrap()
 }
 
-fn job<'a>(agent: &'a ClaudeConfig, dir: &'a Path) -> AuthorJob<'a> {
+fn job<'a>(agent: &'a ClaudeConfig, dir: &'a Path, bridge: &'a Path) -> AuthorJob<'a> {
     AuthorJob {
         agent,
         login: "sk-ant-oat01-test",
+        bridge,
         request: "a kingdom and some pirate isles",
         log_dir: dir,
         attempts: 3,
@@ -63,7 +78,9 @@ async fn a_rejected_draft_goes_back_with_the_reason_and_the_fix_is_accepted() {
     let mut bad = tiny();
     bad["empires"][0]["characters"][0]["office"] = "pope".into();
     let agent = fake(dir.path(), &bad, &tiny());
-    let a = author(&job(&agent, dir.path())).await.unwrap();
+    let a = author(&job(&agent, dir.path(), &bridge(dir.path())))
+        .await
+        .unwrap();
     assert_eq!(a.attempts, 2);
     assert_eq!(a.world.scenario.empires.len(), 2);
     assert!(a.yaml.contains("pirate_king"));
@@ -92,7 +109,7 @@ async fn it_gives_up_after_the_last_attempt() {
     let mut bad = tiny();
     bad["empires"] = json!([]);
     let agent = fake(dir.path(), &bad, &bad);
-    match author(&job(&agent, dir.path())).await {
+    match author(&job(&agent, dir.path(), &bridge(dir.path()))).await {
         Err(AuthorError::Rejected { attempts: 3, last }) => assert!(!last.is_empty()),
         other => panic!("{other:?}"),
     }

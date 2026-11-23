@@ -49,6 +49,8 @@ pub struct AuthorJob<'a> {
     pub agent: &'a ClaudeConfig,
     /// The token from `claude setup-token`.
     pub login: &'a str,
+    /// An Empire executable that answers [`crate::bridge_if_asked`].
+    pub bridge: &'a Path,
     /// What the user asked for.
     pub request: &'a str,
     /// Run output and working directories go here.
@@ -167,8 +169,7 @@ pub async fn author(job: &AuthorJob<'_>) -> Result<Authored, AuthorError> {
         );
         let log = job.log_dir.join(format!("author-{attempt}.json"));
         let outcome = claude::launch(
-            job.agent,
-            job.login,
+            &claude::spec(job.agent, job.login, job.bridge, Vec::new()),
             args(job.agent),
             &input,
             &log,

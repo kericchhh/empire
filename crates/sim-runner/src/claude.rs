@@ -26,7 +26,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::config::ClaudeConfig;
 use crate::fs::{private_dir, private_file};
-use crate::sandbox;
+use crate::net::{Exits, loopback};
+use crate::sandbox::{self, Spec};
 
 /// What the runner knows about the turn it launches an agent for.
 #[derive(Debug, Clone)]
@@ -157,18 +158,46 @@ pub fn prompt(turn: &Turn) -> String {
     )
 }
 
-/// Run one turn in a fresh directory under `work`. Stdout (the event stream) goes to `log`,
+/// Claude Code reaches only its API: non-essential traffic is off.
+const HOSTS: [&str; 1] = ["api.anthropic.com:443"];
+
+/// A sandboxed Claude Code logged in with `login`, that may also reach `tunnels`.
+pub(crate) fn spec(
+    cfg: &ClaudeConfig,
+    login: &str,
+    bridge: &Path,
+    tunnels: Vec<std::net::SocketAddr>,
+) -> Spec {
+    Spec {
+        slot: "claude",
+        program: cfg.command.clone(),
+        whole_dir: false,
+        env: vec![
+            ("CLAUDE_CODE_OAUTH_TOKEN", login.into()),
+            ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".into()),
+        ],
+        exits: Exits {
+            hosts: HOSTS.map(String::from).into(),
+            tunnels,
+        },
+        bridge: bridge.to_owned(),
+    }
+}
+
+/// Run one turn in a fresh sandbox. Stdout (the event stream) goes to `log`,
 /// stderr next to it. The run is killed at `timeout`, or as soon as `stop` completes.
 pub async fn play(
     cfg: &ClaudeConfig,
     login: &str,
+    bridge: &Path,
     turn: &Turn<'_>,
     log: &Path,
     timeout: Duration,
     stop: impl Future<Output = ()>,
 ) -> Result<RunReport, RunError> {
+    let spec = spec(cfg, login, bridge, vec![loopback(turn.mcp_url)?]);
     let args = args(cfg, turn.mcp_url);
-    let outcome = launch(cfg, login, args, &prompt(turn), log, timeout, stop).await?;
+    let outcome = launch(&spec, args, &prompt(turn), log, timeout, stop).await?;
     let summary = summary(&tokio::fs::read_to_string(log).await.unwrap_or_default());
     Ok(RunReport { outcome, summary })
 }
@@ -200,12 +229,10 @@ pub(crate) fn sealed_args(cfg: &ClaudeConfig, output_format: &str) -> Vec<OsStri
     a
 }
 
-/// Launch the CLI in a fresh sandbox, logged in with `login`, with `input` on
-/// stdin, stdout appended to `log` and stderr next to it. Killed at `timeout` or when `stop`
-/// completes.
+/// Launch `spec` with `input` on stdin, stdout appended to `log` and stderr next to it.
+/// Killed at `timeout` or when `stop` completes.
 pub(crate) async fn launch(
-    cfg: &ClaudeConfig,
-    login: &str,
+    spec: &Spec,
     args: Vec<OsString>,
     input: &str,
     log: &Path,
@@ -218,17 +245,10 @@ pub(crate) async fn launch(
     let stdout = private_file(log, true)?;
     let stderr = private_file(&log.with_extension("stderr.log"), true)?;
     let spawn = |source| RunError::Spawn {
-        command: cfg.command.display().to_string(),
+        command: spec.program.display().to_string(),
         source,
     };
-    let mut run = sandbox::command(
-        &cfg.command,
-        &[
-            ("CLAUDE_CODE_OAUTH_TOKEN", login),
-            ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
-        ],
-    )
-    .map_err(spawn)?;
+    let mut run = sandbox::command(spec).map_err(spawn)?;
     let cmd = &mut run.cmd;
     cmd.args(args)
         .stdin(Stdio::piped())

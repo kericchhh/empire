@@ -15,4 +15,4 @@ rmcp = { workspace = true, features = ["client", "transport-streamable-http-clie
 serde_yaml_ng.workspace = true
 tempfile.workspace = true
 dirs.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
