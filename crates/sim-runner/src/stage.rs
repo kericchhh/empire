@@ -19,7 +19,8 @@ fn uid() -> io::Result<u32> {
 fn root() -> io::Result<PathBuf> {
     let uid = uid()?;
     let root = if cfg!(target_os = "macos") {
-        std::env::temp_dir().join("empire-agents")
+        // The sandbox profile matches real paths: `/var` is a link to `/private/var`.
+        std::env::temp_dir().canonicalize()?.join("empire-agents")
     } else {
         PathBuf::from(format!("/var/tmp/empire-{uid}"))
     };
