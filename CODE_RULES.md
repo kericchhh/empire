@@ -1,6 +1,6 @@
 # Code rules
 
-Apply every rule that touches the code you change. Each rule names what enforces it: a lint, a test, a CI job, or `judgment`, which the `review` skill checks and whose example shows the failure to look for. A change is finished when CI's `ci-success` would pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `tsc --noEmit` in `app/` when `app/src` changed.
+Apply every rule that touches the code you change. Each rule names what enforces it: a lint, a test, a CI job, or `judgment`, which the `review` skill checks and whose example shows the failure to look for. A change is finished when CI's `ci-success` would pass, which includes `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `tsc --noEmit` in `app/` when `app/src` changed.
 
 ## Determinism (`sim-core`)
 
@@ -25,7 +25,7 @@ Apply every rule that touches the code you change. Each rule names what enforces
 
 | Rule | Enforced by |
 |---|---|
-| A tool finds its seat from the token and builds output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` alone decides visibility, and new foreign-owned state or event fields are shifted in `shift_foreign`. | proptest `no_seat_sees_anything_hidden_of_another_empire` (`sim-core/tests/replay.rs`) |
+| A tool finds its seat from the token and builds output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` alone decides visibility, and new foreign-owned state or event fields are shifted in `shift_foreign`. | proptest `no_seat_sees_anything_hidden_of_another_empire` (`sim-core/tests/replay.rs`); a tool reading `State` directly, or a new foreign field `shift_foreign` never shifts: judgment, e.g. a foreign `treasury` the proptest leaves untouched |
 | Tool inputs and outputs derive `serde` and `schemars`. | compiler: rmcp's `Parameters` and `Json` require `JsonSchema` |
 | Tool descriptions are written for an agent: what the tool does and when to call it. | judgment, e.g. "Ends the turn." with no word on what happens to queued orders |
 | Every `wait_for_turn` result is self-contained: an agent with a fresh context and only that result can play the turn. | judgment (`verify` reads one), e.g. a result that says "act now" but omits the actions the office allows |
@@ -48,7 +48,7 @@ Apply every rule that touches the code you change. Each rule names what enforces
 | Rule | Enforced by |
 |---|---|
 | Rust and TS code names offices, metrics, resources and regions by ids from the ruleset and scenario; setting names and lore live in `scenarios/`. | judgment, e.g. `if office == "consul"` |
-| A new mechanic is a generic rule, action or office in `rules/standard.yaml`, or engine code; scenarios carry no mechanics. | `scenarios` CI job: the scenario schema has no rule fields and rejects unknown ones |
+| A new mechanic is a generic rule, action or office in `rules/standard.yaml`, or engine code; scenarios carry no mechanics. | `scenarios` CI job: the scenario schema has no rule fields and rejects unknown ones; adding a mechanics field to `Scenario`: judgment, e.g. a `rules:` field added and the schema regenerated |
 
 ## Rust style
 

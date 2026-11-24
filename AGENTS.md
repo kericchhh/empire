@@ -14,13 +14,13 @@ A desktop sandbox where several empires share one world and AI agents play every
 - **Encode lessons in structure.** When a mistake could recur, make the strongest guard that works: a lint (`clippy.toml` in each crate, `deny.toml`), then a test, then a rule in this file or `CODE_RULES.md`.
 - **Record decisions** the code cannot explain in `docs/decisions/`, one numbered file each, and read an area's records before changing it.
 - **Ship from a branch.** Work on a branch off `main`, commit once `cargo fmt --check`, clippy and the tests pass, push, and open a PR against `main`.
-- **Say when a rule changes.** A PR that changes `CODE_RULES.md`, `AGENTS.md`, `.agents/skills/`, a `clippy.toml` or `deny.toml` says which rule changed, how and why under `## Rule changes`.
+- **Say when a rule changes.** A PR that changes `CODE_RULES.md`, `AGENTS.md`, `.agents/skills/`, a `clippy.toml`, `deny.toml`, a CI workflow or `scripts/pr-check` says which rule changed, how and why under `## Rule changes`.
 
 | Rule | Enforced by |
 |---|---|
 | Changes reach `main` only through a PR with `ci-success` green. | the `main` ruleset |
 | A PR body has `## Verified`, `## Review` and `## Reflect`; each finding ends `Fixed`, `Answered: <reason>` or `Deferred #<issue>`; a rule change has `## Rule changes`. | `pr` CI job (`scripts/pr-check`, tested by `scripts/test-pr-check`) |
-| No model calls and no provider SDKs. | `deny.toml` (bans provider SDK crates) |
+| No model calls and no provider SDKs. | `deny.toml` (bans provider SDK crates); a direct call to a provider API: judgment, e.g. a `reqwest` call to `api.anthropic.com` |
 | Every agent run is sealed, and nothing of the user reaches it. | the tests under Agent runs in `CODE_RULES.md` |
 | State is rebuilt by replaying the event log; hidden state never crosses seats or empires. | proptests in `crates/sim-core/tests/replay.rs` |
 | Every other rule in this file. | judgment (`review`), e.g. an action allowed by a character's title in the setting instead of its office |
