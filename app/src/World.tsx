@@ -141,7 +141,7 @@ function Empires({ o, ids, recent }: { o: Overview; ids: Id[]; recent?: string[]
                   const d = def(cid);
                   return (
                     <tr key={cid} title={[d?.persona, ...(c.notes.length ? ["Notes: " + c.notes.join(" / ")] : [])].join("\n")}>
-                      <td>{d?.name ?? cid}<span className="muted small"> {d?.title}</span></td>
+                      <td>{d?.name ?? cid}<span className="muted small"> {d?.title}{!c.alive && " · dead"}</span></td>
                       <td>{label(offices, c.office)}</td>
                       <td>{region(c.region)}</td>
                       {rules.resources.map((s) => <td key={s.id} className="n">{fmt(c.resources[s.id] ?? 0)}</td>)}
@@ -183,7 +183,7 @@ function SeatView({ seat, seq }: { seat: Id; seq: number }) {
       <p className="muted">Exactly what this player sees{p.game_master ? ": the game master sees everything." : ". Numbers they could not know are left out."}</p>
       {p.you_play.map((c) => (
         <section key={c.id} className="card">
-          <h2>{c.name} <span className="muted small">{c.title} · {c.office}</span></h2>
+          <h2>{c.name} <span className="muted small">{c.title} · {c.office}{!c.alive && " · dead"}</span></h2>
           <p>{c.persona}</p>
           <Numbers rows={c.resources} />
           <h3>Goals</h3><ul>{c.goals.map((g) => <li key={g}>{g}</li>)}</ul>
@@ -203,7 +203,7 @@ function SeatView({ seat, seq }: { seat: Id; seq: number }) {
       </section>
       <section className="card">
         <h2>Known people</h2>
-        <ul>{p.people.map((x) => <li key={x.id}>{x.name} <span className="muted small">{x.title} · {x.office} · {x.empire}</span></li>)}</ul>
+        <ul>{p.people.map((x) => <li key={x.id}>{x.name} <span className="muted small">{x.title} · {x.office} · {x.empire}{!x.alive && " · dead"}</span></li>)}</ul>
       </section>
       {p.pending_rulings.length > 0 && (
         <section className="card"><h2>Waiting for the game master</h2><ul>{p.pending_rulings.map((r) => <li key={r.id}>{r.character}: {r.text}</li>)}</ul></section>
@@ -228,13 +228,14 @@ function Chronicle({ log }: { log: Entry[] }) {
   );
 }
 
-/** Inject an event by hand: announced to everyone or to one empire, with optional effects. */
+/** Inject an event by hand: announced to everyone or to one empire, with optional effects and deaths. */
 function Intervene({ o, onError }: { o: Overview; onError: (e: string) => void }) {
   const { scenario: sc, rules } = o.world;
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [empire, setEmpire] = useState("");
   const [effects, setEffects] = useState<{ target: string; delta: number }[]>([]);
+  const [deaths, setDeaths] = useState<Id[]>([]);
   const [done, setDone] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -253,9 +254,9 @@ function Intervene({ o, onError }: { o: Overview; onError: (e: string) => void }
     setSending(true);
     try {
       const fx = effects.map((f) => ({ target: JSON.parse(f.target) as Target, delta: f.delta }));
-      await api.intervene(title, text, fx, empire || null);
+      await api.intervene({ title, text, effects: fx, empire: empire || null, deaths });
       setDone(`Added "${title}".`);
-      setTitle(""); setText(""); setEffects([]);
+      setTitle(""); setText(""); setEffects([]); setDeaths([]);
     } catch (e) {
       onError(String(e));
     } finally {
@@ -286,6 +287,15 @@ function Intervene({ o, onError }: { o: Overview; onError: (e: string) => void }
         </div>
       ))}
       <button onClick={() => setEffects([...effects, { target: targets[0][0], delta: 0 }])}>Add a change</button>
+      <h3>Who dies</h3>
+      <div className="row">
+        {sc.empires.flatMap((e) => e.characters).filter((c) => o.state.characters[c.id]?.alive).map((c) => (
+          <label key={c.id}>
+            <input type="checkbox" checked={deaths.includes(c.id)} onChange={(e) => setDeaths(e.target.checked ? [...deaths, c.id] : deaths.filter((d) => d !== c.id))} />
+            {c.name}
+          </label>
+        ))}
+      </div>
       <div className="row">
         <button className="go" disabled={sending || !title.trim() || !text.trim()} onClick={submit}>Add event</button>
         {done && <span className="muted">{done}</span>}

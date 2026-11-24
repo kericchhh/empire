@@ -23,6 +23,7 @@ offices:
     actions: [work]
     default_action: work
     region_sight: home
+succession: { office: head_of_state, rank_by: influence }
 actions:
   - id: feast
     name: Feast

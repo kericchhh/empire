@@ -60,6 +60,8 @@ offices:
     actions: [toil, protest, celebrate]
     default_action: toil
 
+succession: { office: head_of_state, rank_by: influence }
+
 actions:
   - id: relief
     name: Relief and festivities

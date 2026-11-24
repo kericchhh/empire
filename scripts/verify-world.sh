@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs a headless world on a throwaway database, closes N ticks through the admin API, then
 # prints the recent chronicle and what every seat sees through MCP `look`. Given a seat and a
-# JSON list of orders, that seat acts through MCP `act` before the first tick closes.
-# Usage: scripts/verify-world.sh [scenario] [ticks] [seed] [seat orders]
+# JSON list of orders, that seat acts through MCP `act` before the first tick closes. Given an
+# intervention as JSON (`/api/intervene`'s body), it happens first.
+# Usage: scripts/verify-world.sh [scenario] [ticks] [seed] [seat orders] [intervention]
 set -euo pipefail
 
 scenario=${1:-scenarios/rome.yaml}
@@ -10,6 +11,7 @@ ticks=${2:-4}
 seed=${3:-2026}
 actor=${4:-}
 orders=${5:-[]}
+intervention=${6:-}
 port=$((20000 + RANDOM % 20000))
 api=http://127.0.0.1:$port
 
@@ -47,6 +49,13 @@ tool() {
     -d "$(jq -nc --arg name "$1" --argjson args "$2" '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:$name,arguments:$args}}')" |
     sed -n 's/^data: //p' | jq '.result.structuredContent // .result // .error'
 }
+
+if [ -n "$intervention" ]; then
+  echo "== intervention"
+  curl -sf -X POST -H "Authorization: Bearer $admin" -H 'content-type: application/json' \
+    -d "$intervention" "$api/api/intervene"
+  echo
+fi
 
 if [ -n "$actor" ]; then
   token=$(awk -v s="$actor" '$1 == s { print $2 }' <<<"$seats")

@@ -17,8 +17,8 @@ A desktop sandbox where several empires share one world and AI agents play every
 
 ## State
 
-- **Built:** in `sim-core`, setting-only scenarios, the standard ruleset, several empires per world, offices and appointments to them, seeded starting numbers and fog of war between empires. In `sim-server`, eight MCP tools, the admin API and the SQLite log. In `sim-runner`, sealed Claude Code, Codex and local-model seats, and prompt-generated worlds. In `app/`, worlds, every empire's and seat's view, the chronicle, interventions and agent setup.
-- **Not yet:** the hex map, actions between empires, succession and coups, contacts between empires, and a game-master seat for agents.
+- **Built:** in `sim-core`, setting-only scenarios, the standard ruleset, several empires per world, offices and appointments to them, death by intervention and succession, seeded starting numbers and fog of war between empires. In `sim-server`, eight MCP tools, the admin API and the SQLite log. In `sim-runner`, sealed Claude Code, Codex and local-model seats, and prompt-generated worlds. In `app/`, worlds, every empire's and seat's view, the chronicle, interventions and agent setup.
+- **Not yet:** the hex map, actions between empires, coups, contacts between empires, and a game-master seat for agents.
 - Planned and open work is in GitHub milestones and issues.
 
 ## Core model

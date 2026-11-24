@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sim_core::SeatId;
+use sim_core::engine::Intervention;
 use sim_core::perceive::{Sight, describe};
-use sim_core::{Effect, EmpireId, SeatId};
 use sim_runner::{AgentConfig, AuthorJob, RunnerConfig};
 use sim_runner::{claude_token, codex_login, world_db, worlds_dir};
 use sim_server::game::{Config, Overview, TurnView};
@@ -265,20 +266,8 @@ async fn chronicle(state: State<'_, App>, after: i64) -> Res<Chronicle> {
 }
 
 #[tauri::command]
-async fn intervene(
-    state: State<'_, App>,
-    title: String,
-    text: String,
-    effects: Vec<Effect>,
-    empire: Option<EmpireId>,
-) -> Res<i64> {
-    with(&state, async |h| {
-        h.game
-            .intervene(&title, &text, effects, empire.as_ref())
-            .await
-            .map_err(err)
-    })
-    .await
+async fn intervene(state: State<'_, App>, req: Intervention) -> Res<i64> {
+    with(&state, async |h| h.game.intervene(req).await.map_err(err)).await
 }
 
 #[tauri::command]

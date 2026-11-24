@@ -63,6 +63,8 @@ pub struct CharacterView {
     pub resources: Vec<Number>,
     /// Your own notes from earlier turns, oldest first.
     pub notes: Vec<String>,
+    /// A dead character can take no action, send nothing and sees no numbers.
+    pub alive: bool,
     pub actions: Vec<ActionView>,
 }
 
@@ -110,6 +112,7 @@ pub struct Person {
     pub empire: EmpireId,
     /// Shown only when the region is in sight.
     pub region: Option<RegionId>,
+    pub alive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -120,14 +123,16 @@ pub struct PendingView {
 }
 
 /// Whether an observer in `empire` knows `character` exists: everyone in their own empire,
-/// and foreign holders of public offices. `None` is the game master, who knows everyone.
+/// the dead included, and living foreign holders of public offices. `None` is the game master, who knows everyone.
 pub fn knows(w: &World, state: &State, empire: Option<&EmpireId>, character: &CharacterId) -> bool {
     let Some(cs) = state.characters.get(character) else {
         return false;
     };
     match empire {
         None => true,
-        Some(e) => &cs.empire == e || w.rules.office(&cs.office).is_some_and(|o| o.public),
+        Some(e) => {
+            &cs.empire == e || (cs.alive && w.rules.office(&cs.office).is_some_and(|o| o.public))
+        }
     }
 }
 
@@ -171,7 +176,9 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
                 secrets: c.secrets.clone(),
                 resources: numbers(&rules.resources, |_| true, |r| cs.resources.get(r).copied()),
                 notes: cs.notes.clone(),
+                alive: cs.alive,
                 actions: office
+                    .filter(|_| cs.alive)
                     .into_iter()
                     .flat_map(|o| &o.actions)
                     .filter_map(|a| rules.action(a))
@@ -241,6 +248,7 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
             office: label(rules.office(&cs.office).map(|o| &o.name), &cs.office),
             empire: cs.empire.clone(),
             region: sight.region(&cs.region).then(|| cs.region.clone()),
+            alive: cs.alive,
         })
         .collect();
 
@@ -343,8 +351,8 @@ fn effects_text(w: &World, sight: &Sight, effects: &[Effect]) -> String {
 }
 
 /// What numbers one observer may see. The only place visibility of numbers is decided.
-/// A seat sees its own empire's metrics that its offices may see, the regions its offices
-/// look over, and its own characters' resources. Nothing of other empires' numbers.
+/// A seat sees its own empire's metrics that its living characters' offices may see, the
+/// regions those offices look over, and its own characters' resources. Nothing of other empires' numbers.
 #[derive(Debug, Clone, Default)]
 pub struct Sight {
     all: bool,
@@ -373,6 +381,7 @@ impl Sight {
             .controls
             .iter()
             .filter_map(|c| state.characters.get(c))
+            .filter(|c| c.alive)
             .collect();
         let offices: BTreeSet<&OfficeId> = chars.iter().map(|c| &c.office).collect();
         let sees_empire = offices.iter().any(|o| {
@@ -535,6 +544,7 @@ pub fn describe(w: &World, e: &Event, sight: &Sight) -> Option<String> {
                 office(from)
             )
         }
+        EventKind::CharacterDied { character } => format!("{} has died.", name_of(w, character)),
         EventKind::ActionRejected {
             character,
             action,

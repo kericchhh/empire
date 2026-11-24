@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
-use sim_core::engine::{self, close_tick};
+use sim_core::engine::{self, Intervention, close_tick};
 use sim_core::perceive::{Sight, can_see, describe};
 use sim_core::ruleset::TargetKind;
 use sim_core::{
@@ -22,17 +22,19 @@ enum Step {
     Note(usize),
     Intervene(usize, i32),
     RuleFirstPending(bool, i32),
+    Die(usize),
 }
 
 fn step() -> impl Strategy<Value = Step> {
     prop_oneof![
-        4 => any::<usize>().prop_map(Step::Order),
-        1 => any::<usize>().prop_map(Step::Appoint),
-        1 => any::<usize>().prop_map(Step::Freeform),
-        1 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Step::Message(a, b)),
-        1 => any::<usize>().prop_map(Step::Note),
-        1 => (any::<usize>(), -100..100i32).prop_map(|(t, d)| Step::Intervene(t, d)),
-        1 => (any::<bool>(), -20..20i32).prop_map(|(p, d)| Step::RuleFirstPending(p, d)),
+        8 => any::<usize>().prop_map(Step::Order),
+        2 => any::<usize>().prop_map(Step::Appoint),
+        2 => any::<usize>().prop_map(Step::Freeform),
+        2 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Step::Message(a, b)),
+        2 => any::<usize>().prop_map(Step::Note),
+        2 => (any::<usize>(), -100..100i32).prop_map(|(t, d)| Step::Intervene(t, d)),
+        2 => (any::<bool>(), -20..20i32).prop_map(|(p, d)| Step::RuleFirstPending(p, d)),
+        1 => any::<usize>().prop_map(Step::Die),
     ]
 }
 
@@ -111,6 +113,7 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
         }))
         .collect();
     let gm = sc.game_master.as_ref().unwrap().id.clone();
+    let everyone: Vec<CharacterId> = sc.characters().map(|(_, c)| c.id.clone()).collect();
 
     let mut log = engine::start(w, seed);
     let mut state = State::replay(w, &log);
@@ -157,7 +160,22 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
                         delta: f64::from(d) / 37.0,
                         scaled_by: None,
                     };
-                    if let Ok(e) = engine::intervene(w, &state, "An omen", "", vec![effect], None) {
+                    let omen = Intervention {
+                        title: "An omen".into(),
+                        effects: vec![effect],
+                        ..Intervention::default()
+                    };
+                    for e in engine::intervene(w, &state, omen).into_iter().flatten() {
+                        push(&mut state, &mut log, e);
+                    }
+                }
+                Step::Die(i) => {
+                    let death = Intervention {
+                        title: "A death".into(),
+                        deaths: vec![everyone[i % everyone.len()].clone()],
+                        ..Intervention::default()
+                    };
+                    for e in engine::intervene(w, &state, death).into_iter().flatten() {
                         push(&mut state, &mut log, e);
                     }
                 }
@@ -204,8 +222,9 @@ fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
 
 /// Changes everything of other empires that `ours` must not see: their numbers, notes and
 /// plans, where their characters stand, which private offices they hold and which offices
-/// they move between, every logged delta whose target or scale is theirs, and the words of
-/// every event they caused that reaches none of ours.
+/// they move between, whether their private people live and who of theirs died, every
+/// logged delta whose target or scale is theirs, and the words of every event they caused
+/// that reaches none of ours.
 fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
     let foreign = |t: &Target| owner(state, t).is_some_and(|e| e != ours);
     let theirs = |c: &CharacterId| state.characters.get(c).is_some_and(|c| &c.empire != ours);
@@ -283,6 +302,9 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
                 *from = "hidden".into();
                 *to = "hidden".into();
             }
+            EventKind::CharacterDied { character } if theirs(character) => {
+                *character = "hidden".into();
+            }
             EventKind::ActionRejected {
                 character, reason, ..
             } if theirs(character) => reason.push_str(secret),
@@ -325,6 +347,7 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
         }
         if let Some(i) = offices.iter().position(|o| *o == &cs.office) {
             cs.office = offices[(i + 1) % offices.len()].clone();
+            cs.alive = !cs.alive;
         }
     }
     for p in s.pending.values_mut().filter(|p| theirs(&p.character)) {

@@ -11,7 +11,8 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sim_core::{Effect, EmpireId, Event};
+use sim_core::Event;
+use sim_core::engine::Intervention;
 
 use crate::game::{Game, GameError, Overview};
 use crate::mcp::EmpireMcp;
@@ -126,26 +127,11 @@ async fn events(
     ))
 }
 
-#[derive(Deserialize)]
-struct InterveneBody {
-    title: String,
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    effects: Vec<Effect>,
-    /// Announce only to this empire's seats. Omitted: every seat hears of it.
-    #[serde(default)]
-    empire: Option<EmpireId>,
-}
-
 async fn intervene(
     State(api): State<Api>,
-    Json(b): Json<InterveneBody>,
+    Json(i): Json<Intervention>,
 ) -> Result<Json<Value>, GameError> {
-    let seq = api
-        .game
-        .intervene(&b.title, &b.text, b.effects, b.empire.as_ref())
-        .await?;
+    let seq = api.game.intervene(i).await?;
     Ok(Json(json!({ "seq": seq })))
 }
 

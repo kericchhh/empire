@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use sim_core::engine::{self, close_tick};
+use sim_core::engine::{self, Intervention, close_tick};
 use sim_core::perceive::{Sight, describe};
 use sim_core::{
-    CharacterId, DefinitionError, Effect, EmpireId, Event, Order, Perception, Rejection, Ruling,
-    Scenario, SeatId, State, Submission, Tick, TurnInput, World, perceive,
+    CharacterId, DefinitionError, Event, Order, Perception, Rejection, Ruling, Scenario, SeatId,
+    State, Submission, Tick, TurnInput, World, perceive,
 };
 use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
@@ -436,17 +436,11 @@ impl Game {
         }
     }
 
-    /// A user-made event. With `audience`, only that empire's seats hear of it.
-    pub async fn intervene(
-        &self,
-        title: &str,
-        text: &str,
-        effects: Vec<Effect>,
-        audience: Option<&EmpireId>,
-    ) -> Result<i64, GameError> {
+    /// A user-made event, committed with the deaths it causes.
+    pub async fn intervene(&self, i: Intervention) -> Result<i64, GameError> {
         let mut inner = self.inner.lock().await;
-        let e = engine::intervene(&inner.w, &inner.state, title, text, effects, audience)?;
-        self.commit(&mut inner, vec![e]).await?;
+        let events = engine::intervene(&inner.w, &inner.state, i)?;
+        self.commit(&mut inner, events).await?;
         Ok(inner.last_seq)
     }
 
@@ -479,7 +473,7 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_core::{EventKind, Target};
+    use sim_core::{Effect, EventKind, Target};
 
     const TINY: &str = include_str!("../../sim-core/tests/fixtures/tiny.yaml");
 
@@ -796,7 +790,12 @@ mod tests {
         let t = T::with(&[]).await;
         let mut rx = t.game.subscribe();
         let comet = vec![kingdom("stability", -0.1)];
-        let seq = t.game.intervene("A comet", "", comet, None).await.unwrap();
+        let i = Intervention {
+            title: "A comet".into(),
+            effects: comet,
+            ..Intervention::default()
+        };
+        let seq = t.game.intervene(i).await.unwrap();
         let (got_seq, e) = rx.recv().await.unwrap();
         assert_eq!(got_seq, seq);
         assert!(matches!(e.kind, EventKind::Intervention { .. }));

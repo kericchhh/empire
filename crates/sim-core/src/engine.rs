@@ -9,9 +9,10 @@ use crate::event::{Cause, Effect, Event, EventKind, StartingValue, Target, Visib
 use crate::ids::*;
 use crate::perceive::knows;
 use crate::ruleset::{
-    ActionDef, ChoiceKind, EffectDef, EffectTarget, RuleScope, StatDef, TargetKind, ValueRef,
+    ActionDef, ChoiceKind, EffectDef, EffectTarget, RuleScope, StatDef, Succession, TargetKind,
+    ValueRef,
 };
-use crate::state::State;
+use crate::state::{CharacterState, State};
 use crate::world::{SeatRef, World};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -76,6 +77,8 @@ pub enum Rejection {
     NotYourCharacter(CharacterId),
     #[error("unknown character `{0}`")]
     UnknownCharacter(CharacterId),
+    #[error("`{0}` is dead")]
+    Dead(CharacterId),
     #[error("unknown empire `{0}`")]
     UnknownEmpire(EmpireId),
     #[error("the office `{office}` cannot take action `{action}`")]
@@ -272,6 +275,14 @@ fn check_controls(w: &World, seat: &SeatId, c: &CharacterId) -> Result<(), Rejec
     Ok(())
 }
 
+fn check_alive(state: &State, c: &CharacterId) -> Result<(), Rejection> {
+    match state.characters.get(c) {
+        Some(cs) if cs.alive => Ok(()),
+        Some(_) => Err(Rejection::Dead(c.clone())),
+        None => Err(Rejection::UnknownCharacter(c.clone())),
+    }
+}
+
 /// Every delta must be finite and within `max`, and every target must exist.
 fn check_effects(state: &State, effects: &[Effect], max: f64) -> Result<(), Rejection> {
     for e in effects {
@@ -294,6 +305,7 @@ pub fn check_order(
     order: &Order,
 ) -> Result<(), Rejection> {
     check_controls(w, seat, order.character())?;
+    check_alive(state, order.character())?;
     match order {
         Order::Freeform { text, .. } => check_text(w, text),
         Order::Action {
@@ -345,11 +357,13 @@ pub fn message(
     text: &str,
 ) -> Result<Event, Rejection> {
     check_controls(w, seat, from)?;
+    check_alive(state, from)?;
     check_chat_budget(w, state, seat)?;
     let empire = &state.characters[from].empire;
     if !knows(w, state, Some(empire), to) {
         return Err(Rejection::UnknownCharacter(to.clone()));
     }
+    check_alive(state, to)?;
     check_text(w, text)?;
     let mut seats = vec![seat.clone()];
     if let Some(s) = w.seat_of(to)
@@ -373,6 +387,7 @@ pub fn note(
     text: &str,
 ) -> Result<Event, Rejection> {
     check_controls(w, seat, character)?;
+    check_alive(state, character)?;
     check_chat_budget(w, state, seat)?;
     check_text(w, text)?;
     let kind = EventKind::NoteWritten {
@@ -390,36 +405,58 @@ pub fn note(
 /// Keeps every stored number finite: JSON has no infinity, so one would corrupt the log.
 pub const MAX_INTERVENTION_DELTA: f64 = 1e9;
 
-/// A user-made event. `audience` limits who hears of it to one empire; otherwise every
-/// seat does. Either way, observers only see the effects on numbers they can see.
-pub fn intervene(
-    w: &World,
-    state: &State,
-    title: &str,
-    text: &str,
-    effects: Vec<Effect>,
-    audience: Option<&EmpireId>,
-) -> Result<Event, Rejection> {
-    check_text(w, title)?;
-    if !text.is_empty() {
-        check_text(w, text)?;
+/// A user-made event.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Intervention {
+    pub title: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub effects: Vec<Effect>,
+    /// Announce only to this empire's seats. Omitted: every seat hears of it.
+    #[serde(default)]
+    pub empire: Option<EmpireId>,
+    /// Characters who die. Each death is known to the dead character's empire only.
+    #[serde(default)]
+    pub deaths: Vec<CharacterId>,
+}
+
+/// Observers only see the effects on numbers they can see.
+pub fn intervene(w: &World, state: &State, i: Intervention) -> Result<Vec<Event>, Rejection> {
+    check_text(w, &i.title)?;
+    if !i.text.is_empty() {
+        check_text(w, &i.text)?;
     }
-    check_effects(state, &effects, MAX_INTERVENTION_DELTA)?;
-    let visibility = match audience {
-        Some(empire) if state.empires.contains_key(empire) => Visibility::Empire(empire.clone()),
-        Some(empire) => return Err(Rejection::UnknownEmpire(empire.clone())),
+    check_effects(state, &i.effects, MAX_INTERVENTION_DELTA)?;
+    let visibility = match i.empire {
+        Some(empire) if state.empires.contains_key(&empire) => Visibility::Empire(empire),
+        Some(empire) => return Err(Rejection::UnknownEmpire(empire)),
         None => Visibility::Public,
     };
-    Ok(Event {
+    let deaths: BTreeSet<CharacterId> = i.deaths.into_iter().collect();
+    for c in &deaths {
+        check_alive(state, c)?;
+    }
+    let user = |visibility, kind| Event {
         tick: state.tick,
         cause: Cause::User,
         visibility,
-        kind: EventKind::Intervention {
-            title: title.to_owned(),
-            text: text.to_owned(),
-            effects,
-        },
-    })
+        kind,
+    };
+    let story = EventKind::Intervention {
+        title: i.title,
+        text: i.text,
+        effects: i.effects,
+    };
+    Ok(std::iter::once(user(visibility, story))
+        .chain(deaths.into_iter().map(|character| {
+            let empire = state.characters[&character].empire.clone();
+            user(
+                Visibility::Empire(empire),
+                EventKind::CharacterDied { character },
+            )
+        }))
+        .collect())
 }
 
 struct Scope<'a> {
@@ -483,10 +520,8 @@ fn resolve_action<'a>(
     target: Option<&str>,
     choice: Option<&str>,
 ) -> Result<(&'a ActionDef, Vec<Effect>, Option<EventKind>), Rejection> {
-    let cs = state
-        .characters
-        .get(character)
-        .ok_or_else(|| Rejection::UnknownCharacter(character.clone()))?;
+    check_alive(state, character)?;
+    let cs = &state.characters[character];
     let adef = w
         .rules
         .office(&cs.office)
@@ -538,6 +573,7 @@ fn resolve_action<'a>(
             if same_seat || !reachable {
                 return Err(Rejection::BadTarget(t.to_owned()));
             }
+            check_alive(state, &target_char_id)?;
             target_character = Some(&target_char_id);
         }
     }
@@ -707,7 +743,7 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
                 }
             }
             Order::Freeform { text, .. } => {
-                if check_text(w, text).is_err() {
+                if check_text(w, text).is_err() || check_alive(&log.state, character).is_err() {
                     continue;
                 }
                 let kind = EventKind::FreeformDeclared {
@@ -748,6 +784,23 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
                     effects,
                 },
             });
+        }
+    }
+
+    if let Some(rule) = &w.rules.succession {
+        for empire in log.state.empires.keys() {
+            if let Some(heir) = heir(w, &log.state, empire, rule) {
+                moves.push(Event {
+                    tick,
+                    cause: Cause::System,
+                    visibility: Visibility::Empire(empire.clone()),
+                    kind: EventKind::OfficeChanged {
+                        character: heir.clone(),
+                        from: log.state.characters[heir].office.clone(),
+                        to: rule.office.clone(),
+                    },
+                });
+            }
         }
     }
 
@@ -850,6 +903,26 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
     log.push(system(tick, EventKind::TickEnded { streaks }));
     log.push(system(tick.next(), EventKind::TickStarted));
     log.events
+}
+
+/// The character who takes `rule.office` in `empire` once all its holders there are dead: the
+/// living holder of an appointable office ranked first by `rule.rank_by`, ties to the lowest id.
+fn heir<'a>(
+    w: &World,
+    state: &'a State,
+    empire: &EmpireId,
+    rule: &Succession,
+) -> Option<&'a CharacterId> {
+    let ours = || state.characters.iter().filter(|(_, c)| &c.empire == empire);
+    let mut holders = ours().filter(|(_, c)| c.office == rule.office).peekable();
+    if holders.peek().is_none() || holders.any(|(_, c)| c.alive) {
+        return None;
+    }
+    let rank = |c: &CharacterState| c.resources.get(&rule.rank_by).copied().unwrap_or(0.0);
+    ours()
+        .filter(|(_, c)| c.alive && w.rules.office(&c.office).is_some_and(|o| o.appointable))
+        .max_by(|(a, ca), (b, cb)| rank(ca).total_cmp(&rank(cb)).then(b.cmp(a)))
+        .map(|(id, _)| id)
 }
 
 fn action_visibility(
@@ -1537,26 +1610,61 @@ mod tests {
         );
     }
 
+    fn happen(s: &Sim, i: Intervention) -> Result<Vec<Event>, Rejection> {
+        intervene(&s.w, &s.state, i)
+    }
+
+    fn push_all(s: &mut Sim, events: Vec<Event>) {
+        events.into_iter().for_each(|e| s.push(e));
+    }
+
+    fn kill(s: &mut Sim, who: &[&str]) {
+        let deaths = who.iter().map(|&c| c.into()).collect();
+        let i = Intervention {
+            title: "Death comes".into(),
+            deaths,
+            ..Intervention::default()
+        };
+        let events = happen(s, i).unwrap();
+        push_all(s, events);
+    }
+
     #[test]
     fn interventions_change_the_world_and_validate_targets() {
         let mut s = Sim::tiny();
-        let comet = vec![effect(Target::stat(&"north".into(), &"unrest".into()), 0.5)];
-        let e = intervene(&s.w, &s.state, "A comet", "Omens everywhere", comet, None).unwrap();
-        s.push(e);
+        let comet = Intervention {
+            title: "A comet".into(),
+            text: "Omens everywhere".into(),
+            effects: vec![effect(Target::stat(&"north".into(), &"unrest".into()), 0.5)],
+            ..Intervention::default()
+        };
+        let events = happen(&s, comet).unwrap();
+        push_all(&mut s, events);
         assert!(approx(s.stat("north", "unrest"), 0.7));
         assert!(sees(&s, "pirates", "A comet"));
-        let mana = vec![effect(metric("kingdom", "mana"), 1.0)];
-        let bad = intervene(&s.w, &s.state, "Bad", "", mana, None);
-        assert!(matches!(bad, Err(Rejection::UnknownTarget(_))));
+        let mana = Intervention {
+            title: "Bad".into(),
+            effects: vec![effect(metric("kingdom", "mana"), 1.0)],
+            ..Intervention::default()
+        };
+        assert!(matches!(happen(&s, mana), Err(Rejection::UnknownTarget(_))));
     }
 
     #[test]
     fn interventions_can_be_announced_to_one_empire() {
         let mut s = Sim::tiny();
-        let storm =
-            |s: &Sim, to: &str| intervene(&s.w, &s.state, "A storm", "", vec![], Some(&to.into()));
-        let e = storm(&s, "isles").unwrap();
-        s.push(e);
+        let storm = |s: &Sim, to: &str| {
+            happen(
+                s,
+                Intervention {
+                    title: "A storm".into(),
+                    empire: Some(to.into()),
+                    ..Intervention::default()
+                },
+            )
+        };
+        let events = storm(&s, "isles").unwrap();
+        push_all(&mut s, events);
         assert!(sees(&s, "pirates", "A storm"));
         assert!(!sees(&s, "crown", "A storm"));
         assert_eq!(
@@ -1568,14 +1676,217 @@ mod tests {
     #[test]
     fn interventions_are_bounded_so_the_log_stays_finite() {
         let s = Sim::tiny();
-        let huge = vec![effect(metric("kingdom", "treasury"), f64::MAX)];
+        let hoard = Intervention {
+            title: "Dragon hoard".into(),
+            effects: vec![effect(metric("kingdom", "treasury"), f64::MAX)],
+            ..Intervention::default()
+        };
         assert!(matches!(
-            intervene(&s.w, &s.state, "Dragon hoard", "", huge, None),
+            happen(&s, hoard),
             Err(Rejection::DeltaTooLarge { .. })
         ));
+        let forged = Intervention {
+            title: "Omen".into(),
+            text: "a»\nThe end".into(),
+            ..Intervention::default()
+        };
+        assert_eq!(happen(&s, forged), Err(Rejection::UnsafeText));
+    }
+
+    #[test]
+    fn interventions_kill_only_the_living() {
+        let mut s = Sim::tiny();
+        let deaths = |who: &str| Intervention {
+            title: "Death".into(),
+            deaths: vec![who.into()],
+            ..Intervention::default()
+        };
         assert_eq!(
-            intervene(&s.w, &s.state, "Omen", "a»\nThe end", vec![], None),
-            Err(Rejection::UnsafeText)
+            happen(&s, deaths("merlin")),
+            Err(Rejection::UnknownCharacter("merlin".into()))
+        );
+        kill(&mut s, &["duke"]);
+        assert!(!s.state.characters[&"duke".into()].alive);
+        assert_eq!(
+            happen(&s, deaths("duke")),
+            Err(Rejection::Dead("duke".into()))
+        );
+    }
+
+    /// The tiny world with a second official, Baron Cid, as poor as the duke.
+    fn tiny_with_baron() -> Sim {
+        let mut sc = crate::scenario::Scenario::from_yaml(TINY).unwrap();
+        let mut baron = sc.empires[0].characters[1].clone();
+        baron.id = "baron".into();
+        baron.name = "Baron Cid".into();
+        sc.empires[0].characters.push(baron);
+        let rules = crate::ruleset::Ruleset::from_yaml(TINY_RULES).unwrap();
+        Sim::start(World::new(sc, rules).unwrap(), 7)
+    }
+
+    fn moves(events: &[Event]) -> Vec<(String, String, String)> {
+        events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::OfficeChanged {
+                    character,
+                    from,
+                    to,
+                } => Some((character.0.clone(), from.0.clone(), to.0.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rulers_death_passes_the_office_to_the_living_heir_ranked_first() {
+        let succeed = |duke_influence| {
+            let mut s = tiny_with_baron();
+            s.set_resource("duke", "influence", duke_influence);
+            kill(&mut s, &["queen"]);
+            let events = s.close(&[]);
+            (moves(&events), s)
+        };
+        let (moved, mut s) = succeed(1.0);
+        let duke = (
+            "duke".to_owned(),
+            "official".to_owned(),
+            "head_of_state".to_owned(),
+        );
+        assert_eq!(moved, [duke]);
+        assert!(sees(
+            &s,
+            "rival",
+            "Duke Bors becomes Head of state (formerly Official)."
+        ));
+        assert!(!sees(&s, "pirates", "Duke Bors becomes"));
+        assert!(
+            check(&s, "rival", "duke", "decree", None).is_ok(),
+            "the heir rules"
+        );
+        assert_eq!(succeed(0.0).0[0].0, "baron", "a tie goes to the lowest id");
+        assert_eq!(
+            moves(&s.close(&[])),
+            [],
+            "the office has a living holder again"
+        );
+    }
+
+    #[test]
+    fn with_no_living_heir_the_office_stays_vacant() {
+        let mut s = Sim::tiny();
+        kill(&mut s, &["pirate_king"]);
+        for _ in 0..2 {
+            assert_eq!(moves(&s.close(&[])), [], "a populace does not inherit");
+        }
+        let king = &s.state.characters[&"pirate_king".into()];
+        assert_eq!((king.office.as_str(), king.alive), ("head_of_state", false));
+    }
+
+    #[test]
+    fn the_dead_take_no_actions_and_no_defaults() {
+        let mut s = Sim::tiny();
+        let appointment = appoint("crown", "queen", "duke", "steward");
+        kill(&mut s, &["queen", "northfolk"]);
+        let dead = Err(Rejection::Dead("queen".into()));
+        assert_eq!(check(&s, "crown", "queen", "decree", None), dead);
+        let plan = Order::Freeform {
+            character: "queen".into(),
+            text: "I haunt the hall".into(),
+        };
+        assert_eq!(check_order(&s.w, &s.state, &"crown".into(), &plan), dead);
+        assert_eq!(write(&s, "crown", "queen", "Alas").map(|_| ()), dead);
+        assert_eq!(send(&s, "duke", "Avenge me").map(|_| ()), dead);
+        let to_the_dead = message(
+            &s.w,
+            &s.state,
+            &"rival".into(),
+            &"duke".into(),
+            &"queen".into(),
+            "Hi",
+        );
+        assert_eq!(to_the_dead.map(|_| ()), dead);
+
+        let events = s.close(&[appointment, act("crown", "queen", "decree", None)]);
+        let rejected = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::ActionRejected { reason, .. } if reason == "`queen` is dead"))
+            .count();
+        assert_eq!(rejected, 2, "her appointment and her decree");
+        assert!(
+            approx(s.metric("kingdom", "treasury"), 100.0),
+            "the dead folk do no work"
+        );
+        assert!(approx(s.metric("kingdom", "stability"), 0.5));
+        let duke = (
+            "duke".to_owned(),
+            "official".to_owned(),
+            "head_of_state".to_owned(),
+        );
+        assert_eq!(
+            moves(&events),
+            [duke],
+            "the heir succeeds from the office he held"
+        );
+    }
+
+    #[test]
+    fn no_one_can_act_on_the_dead() {
+        let mut s = Sim::tiny();
+        kill(&mut s, &["duke", "queen"]);
+        let mut t = Sim::tiny();
+        kill(&mut t, &["duke"]);
+        let dead = Err(Rejection::Dead("duke".into()));
+        assert_eq!(check(&t, "crown", "queen", "spy", Some("duke")), dead);
+        assert_eq!(
+            check_choice(
+                &t,
+                "crown",
+                "queen",
+                "appoint",
+                Some("duke"),
+                Some("steward")
+            ),
+            dead
+        );
+        assert_eq!(
+            check(&s, "pirates", "pirate_king", "spy", Some("queen")),
+            Err(Rejection::BadTarget("queen".into())),
+            "a dead ruler is not known abroad"
+        );
+    }
+
+    #[test]
+    fn a_death_is_known_in_its_own_empire_and_its_seat_sees_it_is_dead() {
+        let mut s = Sim::tiny();
+        kill(&mut s, &["queen"]);
+        for (seat, sees_it) in [
+            ("crown", true),
+            ("rival", true),
+            ("gm", true),
+            ("pirates", false),
+        ] {
+            assert_eq!(sees(&s, seat, "Queen Ada has died."), sees_it, "{seat}");
+        }
+        let view = |seat: &str| perceive(&s.w, &s.state, &seat.into()).unwrap();
+        let crown = view("crown");
+        assert!(!crown.you_play[0].alive);
+        assert!(crown.you_play[0].actions.is_empty());
+        assert!(
+            crown.empires[0].metrics.is_empty() && crown.regions.is_empty(),
+            "the dead see no numbers"
+        );
+        let known = |seat| -> Vec<(String, bool)> {
+            view(seat)
+                .people
+                .into_iter()
+                .map(|p| (p.id.0, p.alive))
+                .collect()
+        };
+        assert!(known("rival").contains(&("queen".into(), false)));
+        assert!(
+            !known("pirates").iter().any(|(id, _)| id == "queen"),
+            "abroad, only living rulers are known"
         );
     }
 
