@@ -12,7 +12,7 @@ The hand-written types in `api.ts` drifted from the Rust: `Perception` declared 
 
 ## Consequences
 
-- `ts-rs` is a plain dependency of `sim-core`, `sim-server` and the app, not a cargo feature: a feature would wrap every derive in `cfg_attr`, and the derive adds no I/O to `sim-core`'s own code, so its purity lints still hold.
+- `ts-rs` is a plain dependency of `sim-core`, `sim-server` and the app, not a cargo feature: a feature would wrap every derive in `cfg_attr`, and the derive adds no I/O to `sim-core`'s own code. The crate's purity lints also ban the `ts-rs` calls that write files or read the environment (`TS::export`, `TS::export_all`, `Config::from_env`).
 - One test owns the directory: it deletes it and exports the root types (`Overview`, `TurnView`, `Effect` and the command payloads), so a type that leaves Rust leaves `bindings/` too. A new root type is added to that test; a type it reaches is exported on its own.
 - `u64` and `i64` export as `number`, as `serde_json` sends them. A value past 2^53 would lose precision in the app.
 - `no-serde-warnings` is on: the only serde attribute `ts-rs` does not parse is `transparent` on the newtype ids, which it already exports as their inner type. A new serde attribute that changes the JSON shape needs its bindings checked by hand.
