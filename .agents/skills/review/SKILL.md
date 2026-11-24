@@ -26,7 +26,7 @@ Done when every class has been checked against every changed file, and every rep
 - **Core model:** a change that breaks an `AGENTS.md` core-model rule without the user having agreed to it.
 - **Tests:** behaviour shipped without a test that fails when it breaks; the leak test not extended for new foreign data (`CODE_RULES.md`, Seats).
 - **Tight:** code that could be smaller or simpler with the same behaviour: duplication, dead code, an abstraction with one user, a comment that restates the code.
-- **Drift:** `AGENTS.md` (State, Workspace), `README.md`, a decision record or the schema no longer matching the code.
+- **Drift:** `AGENTS.md` (State, Workspace), `README.md`, a decision record or the schema no longer matching the code, or a rule-table row whose enforcer cannot catch the failure it claims (try the failure and see if the enforcer fires).
 
 ## Report
 
