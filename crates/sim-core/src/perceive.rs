@@ -18,12 +18,13 @@ pub struct Perception {
     pub game_master: bool,
     /// The empire this seat plays for. `None` for the game master.
     pub your_empire: Option<EmpireId>,
-    /// Every empire in the world. Numbers appear only where this seat can see them.
+    /// This seat's empire and every empire it has met; for the game master, every empire.
+    /// Numbers appear only where this seat can see them.
     pub empires: Vec<EmpireView>,
     pub you_play: Vec<CharacterView>,
     pub regions: Vec<RegionView>,
-    /// Everyone this seat knows of: its own empire's people, and foreign holders of
-    /// public offices.
+    /// Everyone this seat knows of: its own empire's people, and holders of public offices
+    /// in empires it has met.
     pub people: Vec<Person>,
     /// What this seat saw happen during the previous and the current tick, oldest first.
     pub recent: Vec<String>,
@@ -120,14 +121,18 @@ pub struct PendingView {
 }
 
 /// Whether an observer in `empire` knows `character` exists: everyone in their own empire,
-/// and foreign holders of public offices. `None` is the game master, who knows everyone.
+/// and holders of public offices in empires it has met. `None` is the game master, who
+/// knows everyone.
 pub fn knows(w: &World, state: &State, empire: Option<&EmpireId>, character: &CharacterId) -> bool {
     let Some(cs) = state.characters.get(character) else {
         return false;
     };
     match empire {
         None => true,
-        Some(e) => &cs.empire == e || w.rules.office(&cs.office).is_some_and(|o| o.public),
+        Some(e) => {
+            &cs.empire == e
+                || state.met(e, &cs.empire) && w.rules.office(&cs.office).is_some_and(|o| o.public)
+        }
     }
 }
 
@@ -198,6 +203,7 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
         .scenario
         .empires
         .iter()
+        .filter(|e| sref.empire.is_none_or(|own| state.met(own, &e.id)))
         .map(|e| EmpireView {
             id: e.id.clone(),
             name: e.name.clone(),
@@ -522,6 +528,10 @@ pub fn describe(w: &World, e: &Event, sight: &Sight) -> Option<String> {
                 effects_text(w, sight, effects)
             )
         }
+        EventKind::EmpiresMet { a, b } => {
+            let name = |e: &EmpireId| label(w.empire(e).map(|d| &d.name), e);
+            format!("{} and {} have made contact.", name(a), name(b))
+        }
         EventKind::OfficeChanged {
             character,
             from,
@@ -652,6 +662,45 @@ mod tests {
             .unwrap();
         assert_eq!(king.region, None, "his region is not in sight");
         assert_eq!(view(&s, "gm").people.len(), 5);
+    }
+
+    #[test]
+    fn an_empire_knows_only_the_empires_it_has_met() {
+        let mut s = Sim::three();
+        let empires = |s: &Sim, seat| -> Vec<String> {
+            view(s, seat).empires.into_iter().map(|e| e.id.0).collect()
+        };
+        let people = |s: &Sim, seat| -> Vec<String> {
+            view(s, seat).people.into_iter().map(|p| p.id.0).collect()
+        };
+        assert_eq!(empires(&s, "vale"), ["vale", "ridge"]);
+        assert_eq!(
+            people(&s, "vale"),
+            ["lord_vale", "vale_folk", "queen_ridge"]
+        );
+        assert_eq!(empires(&s, "marsh"), ["marsh"]);
+        assert_eq!(people(&s, "marsh"), ["elder_marsh", "marsh_folk", "singer"]);
+        assert_eq!(empires(&s, "gm").len(), 3);
+        s.close(&[]);
+        for seat in ["marsh", "singer"] {
+            let v = view(&s, seat);
+            let seen = format!("{:?} {:?}", v.empires, v.recent);
+            for foreign in ["Vale", "Ridge", "Aren", "Brann", "Orchard", "Mines"] {
+                assert!(!seen.contains(foreign), "{seat} sees {foreign}: {seen}");
+            }
+        }
+        let e = crate::engine::introduce(&s.state, &"marsh".into(), &"ridge".into()).unwrap();
+        s.push(e);
+        assert_eq!(empires(&s, "marsh"), ["ridge", "marsh"]);
+        assert_eq!(
+            people(&s, "marsh"),
+            ["queen_ridge", "elder_marsh", "marsh_folk", "singer"]
+        );
+        assert_eq!(
+            empires(&s, "vale"),
+            ["vale", "ridge"],
+            "the Vale never hears of it"
+        );
     }
 
     #[test]

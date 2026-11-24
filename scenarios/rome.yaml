@@ -173,4 +173,6 @@ empires:
       - { id: pretender, name: The Pretender, controls: [tiridates] }
       - { id: villages, name: The Villages, controls: [farmers_mesopotamia] }
 
+contacts: [[rome, parthia]]
+
 game_master: { id: gm, name: Game Master }

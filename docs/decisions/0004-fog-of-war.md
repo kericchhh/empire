@@ -4,7 +4,7 @@ Accepted 2026-11-22.
 
 ## Decision
 
-A seat sees its own empire's numbers through its offices and nothing of another empire's numbers. Foreign empires are known by name, description and culture. Foreign characters are known only if their office is `public` (heads of state), so diplomacy works through them. Actions, rule events and public rulings are visible to the acting empire only (`Visibility::Empire`), and secret actions to the acting seat only. An action on a character of another empire also reaches that empire (`Visibility::Empires`), or, if it is secret, only that character's seat, so the victim of a bribe learns of it while the rest of its empire does not. Interventions are public unless the admin names an `empire`.
+A seat sees its own empire's numbers through its offices and nothing of another empire's numbers. Foreign empires are known only once met (0012), and then by name, description and culture. Their characters are known only if their office is `public` (heads of state), so diplomacy works through them. Actions, rule events and public rulings are visible to the acting empire only (`Visibility::Empire`), and secret actions to the acting seat only. An action on a character of another empire also reaches that empire (`Visibility::Empires`), or, if it is secret, only that character's seat, so the victim of a bribe learns of it while the rest of its empire does not. Interventions are public unless the admin names an `empire`.
 
 Perception has two layers. `Sight` decides which numbers an observer sees. `describe` applies it to every chronicle line: effects (and what scaled them), rule events in unseen regions, and rule labels whose condition reads a hidden value.
 

@@ -17,6 +17,8 @@ pub struct State {
     pub regions: BTreeMap<RegionId, RegionState>,
     pub characters: BTreeMap<CharacterId, CharacterState>,
     pub joined: BTreeSet<SeatId>,
+    /// Empires that have met, each pair with the smaller id first.
+    pub contacts: BTreeSet<(EmpireId, EmpireId)>,
     /// Free-form actions awaiting a game-master ruling.
     pub pending: BTreeMap<String, Pending>,
     pub streaks: BTreeMap<String, u32>,
@@ -91,6 +93,12 @@ fn ranges<Id: Clone + Ord>(defs: &[StatDef<Id>]) -> BTreeMap<Id, Range> {
         .collect()
 }
 
+/// A contact as `State::contacts` keeps it: the smaller id first.
+pub(crate) fn pair(a: &EmpireId, b: &EmpireId) -> (EmpireId, EmpireId) {
+    let (a, b) = if a <= b { (a, b) } else { (b, a) };
+    (a.clone(), b.clone())
+}
+
 impl State {
     /// The world before its first event: every number at the ruleset's `initial`, until
     /// `WorldGenerated` sets the starting values.
@@ -141,6 +149,7 @@ impl State {
             regions,
             characters,
             joined: BTreeSet::new(),
+            contacts: BTreeSet::new(),
             pending: BTreeMap::new(),
             streaks: BTreeMap::new(),
             recent: Vec::new(),
@@ -171,6 +180,11 @@ impl State {
                 .get(resource)
                 .copied(),
         }
+    }
+
+    /// Whether `a` and `b` know each other. Every empire knows itself.
+    pub fn met(&self, a: &EmpireId, b: &EmpireId) -> bool {
+        a == b || self.contacts.contains(&pair(a, b))
     }
 
     pub fn metric(&self, empire: &EmpireId, metric: &MetricId) -> Option<f64> {
@@ -273,6 +287,9 @@ impl State {
                 }
             }
             EventKind::TickEnded { streaks } => self.streaks = streaks.clone(),
+            EventKind::EmpiresMet { a, b } => {
+                self.contacts.insert(pair(a, b));
+            }
         }
         self.recent.push(e.clone());
     }

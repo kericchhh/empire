@@ -8,6 +8,7 @@ use crate::world::World;
 
 pub const TINY: &str = include_str!("../tests/fixtures/tiny.yaml");
 pub const TINY_RULES: &str = include_str!("../tests/fixtures/tiny_rules.yaml");
+pub const THREE: &str = include_str!("../tests/fixtures/three.yaml");
 pub const ROME: &str = include_str!("../../../scenarios/rome.yaml");
 
 /// A world and its live state, advanced the way the server does it.
@@ -30,6 +31,16 @@ impl Sim {
         Self::start(
             World::standard(sc).expect("rome fits the standard ruleset"),
             seed,
+        )
+    }
+
+    /// Three empires on the standard ruleset: the Vale and the Ridge know each other, the
+    /// Marsh knows nobody.
+    pub fn three() -> Self {
+        let sc = Scenario::from_yaml(THREE).expect("fixture scenario is valid");
+        Self::start(
+            World::standard(sc).expect("fixture fits the standard ruleset"),
+            7,
         )
     }
 

@@ -26,4 +26,5 @@ empires:
       - { id: islanders, name: The Islanders, office: cohort, region: isle }
     seats:
       - { id: pirates, name: The Pirates, controls: [pirate_king, islanders] }
+contacts: [[kingdom, isles]]
 game_master: { id: gm, name: Game Master }

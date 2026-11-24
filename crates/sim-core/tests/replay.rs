@@ -10,6 +10,7 @@ use sim_core::{
 };
 
 const ROME: &str = include_str!("../../../scenarios/rome.yaml");
+const THREE: &str = include_str!("fixtures/three.yaml");
 
 /// One thing that can happen during a tick. Choices are indexes, resolved against the live
 /// state, so every generated history is playable.
@@ -21,6 +22,7 @@ enum Step {
     Message(usize, usize),
     Note(usize),
     Intervene(usize, i32),
+    Introduce(usize, usize),
     RuleFirstPending(bool, i32),
 }
 
@@ -32,6 +34,7 @@ fn step() -> impl Strategy<Value = Step> {
         1 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Step::Message(a, b)),
         1 => any::<usize>().prop_map(Step::Note),
         1 => (any::<usize>(), -100..100i32).prop_map(|(t, d)| Step::Intervene(t, d)),
+        1 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Step::Introduce(a, b)),
         1 => (any::<bool>(), -20..20i32).prop_map(|(p, d)| Step::RuleFirstPending(p, d)),
     ]
 }
@@ -161,6 +164,12 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
                         push(&mut state, &mut log, e);
                     }
                 }
+                Step::Introduce(a, b) => {
+                    let e = |i: usize| &sc.empires[i % sc.empires.len()].id;
+                    if let Ok(e) = engine::introduce(&state, e(a), e(b)) {
+                        push(&mut state, &mut log, e);
+                    }
+                }
                 Step::RuleFirstPending(public, d) => {
                     if let Some(id) = state.pending.keys().next() {
                         inputs.push(TurnInput {
@@ -170,7 +179,7 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
                                 outcome: "So it shall be".into(),
                                 effects: vec![Effect {
                                     target: Target::Metric {
-                                        empire: "rome".into(),
+                                        empire: sc.empires[0].id.clone(),
                                         metric: "stability".into(),
                                     },
                                     delta: f64::from(d) / 100.0,
@@ -190,8 +199,10 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
     (state, log)
 }
 
-fn rome() -> World {
-    World::standard(Scenario::from_yaml(ROME).unwrap()).unwrap()
+/// Rome, whose empires know each other from the start, or three empires of which one knows
+/// nobody until an intervention introduces it.
+fn world(three: bool) -> World {
+    World::standard(Scenario::from_yaml(if three { THREE } else { ROME }).unwrap()).unwrap()
 }
 
 fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
@@ -205,8 +216,15 @@ fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
 /// Changes everything of other empires that `ours` must not see: their numbers, notes and
 /// plans, where their characters stand, which private offices they hold and which offices
 /// they move between, every logged delta whose target or scale is theirs, and the words of
-/// every event they caused that reaches none of ours.
-fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
+/// every event they caused that reaches none of ours. Of an empire `ours` has not met, also
+/// its names, culture and every office; and which other empires have met each other.
+fn shift_foreign(
+    w: &World,
+    state: &State,
+    log: &[Event],
+    ours: &EmpireId,
+) -> (World, State, Vec<Event>) {
+    let unmet = |e: &EmpireId| !state.met(ours, e);
     let foreign = |t: &Target| owner(state, t).is_some_and(|e| e != ours);
     let theirs = |c: &CharacterId| state.characters.get(c).is_some_and(|c| &c.empire != ours);
     let reaches_us = |t: &Option<String>| {
@@ -233,7 +251,7 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
         })
         .collect();
     let their_plan = |id: &String| plans.get(id).is_some_and(theirs);
-    let shift = |mut e: Event| {
+    let shift = |mut e: Event| -> Option<Event> {
         let to_them = matches!(&e.visibility, Visibility::Empire(v) if v != ours);
         match &mut e.kind {
             EventKind::ActionResolved {
@@ -292,9 +310,10 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
             EventKind::MessageSent { from, to, text } if theirs(from) && theirs(to) => {
                 text.push_str(secret)
             }
+            EventKind::EmpiresMet { a, b } if a != ours && b != ours => return None,
             _ => {}
         }
-        e
+        Some(e)
     };
     let next = |all: &[&RegionId], r: &RegionId| {
         let i = all.iter().position(|x| *x == r)?;
@@ -309,14 +328,12 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
     for rs in s.regions.values_mut().filter(|r| &r.owner != ours) {
         rs.stats.values_mut().for_each(|v| *v += 1.0);
     }
-    let offices: Vec<&OfficeId> = w
-        .rules
-        .offices
-        .iter()
-        .filter(|o| !o.public)
-        .map(|o| &o.id)
-        .collect();
+    let offices = |public: bool| -> Vec<&OfficeId> {
+        let all = w.rules.offices.iter();
+        all.filter(|o| public || !o.public).map(|o| &o.id).collect()
+    };
     for cs in s.characters.values_mut().filter(|c| &c.empire != ours) {
+        let offices = offices(unmet(&cs.empire));
         cs.resources.values_mut().for_each(|v| *v += 1.0);
         cs.notes.push("A hidden thought".into());
         let homes: Vec<&RegionId> = state.regions_of(&cs.empire).collect();
@@ -330,8 +347,30 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
     for p in s.pending.values_mut().filter(|p| theirs(&p.character)) {
         p.text.push_str(secret);
     }
-    s.recent = s.recent.into_iter().map(shift).collect();
-    (s, log.iter().cloned().map(shift).collect())
+    let empires: Vec<&EmpireId> = state.empires.keys().collect();
+    for (i, a) in empires.iter().enumerate().filter(|(_, a)| **a != ours) {
+        for b in empires[i + 1..].iter().filter(|b| **b != ours) {
+            let (a, b) = ((*a).clone(), (*b).clone());
+            if !s.contacts.remove(&(a.clone(), b.clone())) {
+                s.contacts.insert((a, b));
+            }
+        }
+    }
+    s.recent = s.recent.into_iter().filter_map(shift).collect();
+    let mut w = w.clone();
+    for e in w.scenario.empires.iter_mut().filter(|e| unmet(&e.id)) {
+        e.name.push_str(secret);
+        e.description.push_str(secret);
+        e.culture.insert("hidden".into(), secret.into());
+        for r in &mut e.regions {
+            r.name.push_str(secret);
+        }
+        for c in &mut e.characters {
+            c.name.push_str(secret);
+            c.title.push_str(secret);
+        }
+    }
+    (w, s, log.iter().cloned().filter_map(shift).collect())
 }
 
 fn chronicle(w: &World, state: &State, log: &[Event], seat: &SeatId) -> Vec<String> {
@@ -346,8 +385,8 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     #[test]
-    fn replaying_a_serialized_log_rebuilds_the_live_state(seed in any::<u64>(), ticks in history()) {
-        let w = rome();
+    fn replaying_a_serialized_log_rebuilds_the_live_state(three in any::<bool>(), seed in any::<u64>(), ticks in history()) {
+        let w = world(three);
         let (live, log) = run(&w, seed, &ticks);
         let stored: Vec<String> = log.iter().map(|e| serde_json::to_string(e).unwrap()).collect();
         let loaded: Vec<Event> = stored.iter().map(|s| serde_json::from_str(s).unwrap()).collect();
@@ -356,28 +395,28 @@ proptest! {
     }
 
     #[test]
-    fn a_state_snapshot_round_trips_through_json(seed in any::<u64>(), ticks in history()) {
-        let w = rome();
+    fn a_state_snapshot_round_trips_through_json(three in any::<bool>(), seed in any::<u64>(), ticks in history()) {
+        let w = world(three);
         let (live, _) = run(&w, seed, &ticks);
         let restored: State = serde_json::from_str(&serde_json::to_string(&live).unwrap()).unwrap();
         prop_assert_eq!(restored, live);
     }
 
     #[test]
-    fn the_same_seed_and_steps_produce_the_same_history(seed in any::<u64>(), ticks in history()) {
-        let w = rome();
+    fn the_same_seed_and_steps_produce_the_same_history(three in any::<bool>(), seed in any::<u64>(), ticks in history()) {
+        let w = world(three);
         prop_assert_eq!(run(&w, seed, &ticks).1, run(&w, seed, &ticks).1);
     }
 
     #[test]
-    fn no_seat_sees_anything_hidden_of_another_empire(seed in any::<u64>(), ticks in history()) {
-        let w = rome();
+    fn no_seat_sees_anything_hidden_of_another_empire(three in any::<bool>(), seed in any::<u64>(), ticks in history()) {
+        let w = world(three);
         let (state, log) = run(&w, seed, &ticks);
         for (empire, seat) in w.scenario.seats() {
-            let (other, other_log) = shift_foreign(&w, &state, &log, &empire.id);
-            prop_assert_eq!(perceive(&w, &other, &seat.id), perceive(&w, &state, &seat.id));
+            let (ow, other, other_log) = shift_foreign(&w, &state, &log, &empire.id);
+            prop_assert_eq!(perceive(&ow, &other, &seat.id), perceive(&w, &state, &seat.id));
             prop_assert_eq!(
-                chronicle(&w, &other, &other_log, &seat.id),
+                chronicle(&ow, &other, &other_log, &seat.id),
                 chronicle(&w, &state, &log, &seat.id)
             );
         }

@@ -450,6 +450,14 @@ impl Game {
         Ok(inner.last_seq)
     }
 
+    /// Two empires that have not met learn of each other.
+    pub async fn introduce(&self, a: &EmpireId, b: &EmpireId) -> Result<i64, GameError> {
+        let mut inner = self.inner.lock().await;
+        let e = engine::introduce(&inner.state, a, b)?;
+        self.commit(&mut inner, vec![e]).await?;
+        Ok(inner.last_seq)
+    }
+
     pub async fn overview(&self) -> Overview {
         let inner = self.inner.lock().await;
         let chronicle = inner

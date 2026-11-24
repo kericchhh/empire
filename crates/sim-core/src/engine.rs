@@ -11,7 +11,7 @@ use crate::perceive::knows;
 use crate::ruleset::{
     ActionDef, ChoiceKind, EffectDef, EffectTarget, RuleScope, StatDef, TargetKind, ValueRef,
 };
-use crate::state::State;
+use crate::state::{State, pair};
 use crate::world::{SeatRef, World};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -123,19 +123,38 @@ pub enum Rejection {
     TooManyEffects { max: usize },
     #[error("ruling deltas must be finite and within ±{max}")]
     DeltaTooLarge { max: f64 },
+    #[error("`{a}` and `{b}` already know each other")]
+    AlreadyMet { a: EmpireId, b: EmpireId },
     #[error("unknown target {0:?}")]
     UnknownTarget(Target),
 }
 
-/// The first events of a world: its seed, then every starting number. A number the scenario
-/// sets is taken as given; any other is drawn from the ruleset's `start_range` with the seed.
+/// The first events of a world: its seed, every starting number, and the empires that start
+/// in contact. A number the scenario sets is taken as given; any other is drawn from the
+/// ruleset's `start_range` with the seed.
 pub fn start(w: &World, seed: u64) -> Vec<Event> {
     let values = starting_values(w, seed);
-    vec![
+    let contacts = w.scenario.contacts.iter();
+    let met = contacts.map(|[a, b]| meeting(Tick(0), Cause::System, a, b));
+    [
         system(Tick(0), EventKind::WorldStarted { seed }),
         system(Tick(0), EventKind::WorldGenerated { values }),
-        system(Tick(0), EventKind::TickStarted),
     ]
+    .into_iter()
+    .chain(met)
+    .chain([system(Tick(0), EventKind::TickStarted)])
+    .collect()
+}
+
+/// Two empires learn of each other, and no third empire learns of it.
+fn meeting(tick: Tick, cause: Cause, a: &EmpireId, b: &EmpireId) -> Event {
+    let (a, b) = pair(a, b);
+    Event {
+        tick,
+        cause,
+        visibility: Visibility::Empires(vec![a.clone(), b.clone()]),
+        kind: EventKind::EmpiresMet { a, b },
+    }
 }
 
 fn starting_values(w: &World, seed: u64) -> Vec<StartingValue> {
@@ -420,6 +439,20 @@ pub fn intervene(
             effects,
         },
     })
+}
+
+/// A user-made meeting of two empires that have not met.
+pub fn introduce(state: &State, a: &EmpireId, b: &EmpireId) -> Result<Event, Rejection> {
+    if let Some(e) = [a, b].into_iter().find(|e| !state.empires.contains_key(e)) {
+        return Err(Rejection::UnknownEmpire(e.clone()));
+    }
+    if state.met(a, b) {
+        return Err(Rejection::AlreadyMet {
+            a: a.clone(),
+            b: b.clone(),
+        });
+    }
+    Ok(meeting(state.tick, Cause::User, a, b))
 }
 
 struct Scope<'a> {
@@ -1562,6 +1595,89 @@ mod tests {
         assert_eq!(
             storm(&s, "atlantis"),
             Err(Rejection::UnknownEmpire("atlantis".into()))
+        );
+    }
+
+    #[test]
+    fn scenario_contacts_are_logged_at_start_for_the_two_empires_only() {
+        let s = Sim::three();
+        let events = start(&s.w, 7);
+        let met: Vec<&Event> = events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::EmpiresMet { .. }))
+            .collect();
+        assert_eq!(met.len(), 1);
+        assert_eq!(
+            met[0].kind,
+            EventKind::EmpiresMet {
+                a: "ridge".into(),
+                b: "vale".into()
+            }
+        );
+        assert_eq!(
+            met[0].visibility,
+            Visibility::Empires(vec!["ridge".into(), "vale".into()])
+        );
+        assert!(s.state.met(&"vale".into(), &"ridge".into()));
+        assert!(!s.state.met(&"vale".into(), &"marsh".into()));
+    }
+
+    #[test]
+    fn an_intervention_introduces_two_empires_once() {
+        let mut s = Sim::three();
+        let (marsh, vale) = (EmpireId::from("marsh"), EmpireId::from("vale"));
+        let e = introduce(&s.state, &vale, &marsh).unwrap();
+        assert_eq!(e.cause, Cause::User);
+        assert_eq!(
+            e.kind,
+            EventKind::EmpiresMet {
+                a: marsh.clone(),
+                b: vale.clone()
+            }
+        );
+        assert_eq!(
+            e.visibility,
+            Visibility::Empires(vec![marsh.clone(), vale.clone()])
+        );
+        s.push(e);
+        assert!(s.state.met(&vale, &marsh));
+        assert!(sees(
+            &s,
+            "marsh",
+            "The Marsh and The Vale have made contact."
+        ));
+        assert!(!sees(&s, "ridge", "The Marsh"));
+        assert!(matches!(
+            introduce(&s.state, &marsh, &vale),
+            Err(Rejection::AlreadyMet { .. })
+        ));
+        assert!(matches!(
+            introduce(&s.state, &vale, &vale),
+            Err(Rejection::AlreadyMet { .. })
+        ));
+        assert_eq!(
+            introduce(&s.state, &vale, &"atlantis".into()),
+            Err(Rejection::UnknownEmpire("atlantis".into()))
+        );
+    }
+
+    #[test]
+    fn empires_that_have_not_met_cannot_reach_each_other() {
+        let mut s = Sim::three();
+        assert_eq!(
+            check(&s, "singer", "singer", "denounce", Some("lord_vale")),
+            Err(Rejection::BadTarget("lord_vale".into()))
+        );
+        let (seat, from, to) = ("marsh".into(), "elder_marsh".into(), "lord_vale".into());
+        assert_eq!(
+            message(&s.w, &s.state, &seat, &from, &to, "Greetings"),
+            Err(Rejection::UnknownCharacter(to.clone()))
+        );
+        s.push(introduce(&s.state, &"marsh".into(), &"vale".into()).unwrap());
+        assert!(message(&s.w, &s.state, &seat, &from, &to, "Greetings").is_ok());
+        assert_eq!(
+            check(&s, "singer", "singer", "denounce", Some("lord_vale")),
+            Ok(())
         );
     }
 
