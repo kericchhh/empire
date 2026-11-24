@@ -10,7 +10,7 @@ Turn a goal into a GitHub milestone whose issues are slices: each one PR, each w
 
 ## Steps
 
-1. **Read the state:** the State section of `AGENTS.md`, open milestones and issues (`gh issue list --state open`, `gh api repos/{owner}/{repo}/milestones`), recently merged PRs, and the `docs/decisions/` records for the areas the goal touches.
+1. **Read the state:** open `debt` issues first (`gh issue list --label debt --state open`; run the `audit` skill if the last milestone closed without one), then the State section of `AGENTS.md`, open milestones and issues (`gh issue list --state open`, `gh api repos/{owner}/{repo}/milestones`), recently merged PRs, and the `docs/decisions/` records for the areas the goal touches.
 2. **Map the seams.** With the code graph, find the modules the goal reaches and what each one's interface would gain. Note which parts change the core model in `AGENTS.md`.
 3. **Cut slices.** Each slice is a tracer bullet: thin, end to end, shippable alone, and small enough to review in one sitting. Order them so the riskiest seam (perception, the event schema, the sandbox) lands early and is tested hard. Each gets:
    - **Goal:** one sentence.
