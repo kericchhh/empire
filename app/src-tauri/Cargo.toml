@@ -14,6 +14,7 @@ sim-runner.workspace = true
 sim-server = { path = "../../crates/sim-server" }
 serde.workspace = true
 serde_json.workspace = true
+ts-rs.workspace = true
 tauri = { version = "2.12.7", features = [] }
 tokio = { workspace = true, features = ["sync", "net", "process", "time"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

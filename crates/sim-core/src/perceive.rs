@@ -3,6 +3,7 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::event::{Effect, Event, EventKind, Target, Visibility};
 use crate::ids::*;
@@ -11,7 +12,7 @@ use crate::state::State;
 use crate::world::World;
 
 /// Everything one seat may know this tick. Self-contained so a fresh agent can play from it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Perception {
     pub world: WorldView,
     pub seat: SeatId,
@@ -32,7 +33,7 @@ pub struct Perception {
     pub orders_per_character: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct WorldView {
     pub name: String,
     pub description: String,
@@ -40,7 +41,7 @@ pub struct WorldView {
     pub tick: Tick,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct EmpireView {
     pub id: EmpireId,
     pub name: String,
@@ -49,7 +50,7 @@ pub struct EmpireView {
     pub metrics: Vec<Number>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct CharacterView {
     pub id: CharacterId,
     pub name: String,
@@ -66,7 +67,7 @@ pub struct CharacterView {
     pub actions: Vec<ActionView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct ActionView {
     pub id: ActionId,
     pub name: String,
@@ -78,21 +79,21 @@ pub struct ActionView {
     pub choice: Option<ChoiceView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct ChoiceView {
     pub kind: ChoiceKind,
     /// Each valid `choice` id, with its name.
     pub options: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Number {
     pub id: String,
     pub name: String,
     pub value: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct RegionView {
     pub id: RegionId,
     pub name: String,
@@ -101,7 +102,7 @@ pub struct RegionView {
     pub stats: Vec<Number>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Person {
     pub id: CharacterId,
     pub name: String,
@@ -112,7 +113,7 @@ pub struct Person {
     pub region: Option<RegionId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct PendingView {
     pub id: String,
     pub character: CharacterId,

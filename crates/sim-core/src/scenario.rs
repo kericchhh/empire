@@ -6,11 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::def::{self, DefinitionError, invalid, unique, unknown};
 use crate::ids::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
     pub name: String,
@@ -26,7 +27,7 @@ pub struct Scenario {
     pub game_master: Option<GameMasterDef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Calendar {
     pub start_year: i64,
@@ -40,7 +41,7 @@ pub struct Calendar {
 }
 
 /// Presentation hints the UI applies as CSS variables and vocabulary.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Theme {
     #[serde(default)]
@@ -54,7 +55,7 @@ pub struct Theme {
     pub terms: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct EmpireDef {
     pub id: EmpireId,
@@ -74,7 +75,7 @@ pub struct EmpireDef {
     pub seats: Vec<SeatDef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct RegionDef {
     pub id: RegionId,
@@ -86,7 +87,7 @@ pub struct RegionDef {
     pub start: BTreeMap<StatId, f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct CharacterDef {
     pub id: CharacterId,
@@ -110,7 +111,7 @@ pub struct CharacterDef {
     pub start: BTreeMap<ResourceId, f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SeatDef {
     pub id: SeatId,
@@ -119,7 +120,7 @@ pub struct SeatDef {
     pub controls: Vec<CharacterId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct GameMasterDef {
     pub id: SeatId,

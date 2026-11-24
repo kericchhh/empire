@@ -4,13 +4,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::def::{DefinitionError, invalid, unknown};
 use crate::ids::*;
 use crate::ruleset::Ruleset;
 use crate::scenario::{CharacterDef, EmpireDef, RegionDef, Scenario, SeatDef};
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct World {
     pub scenario: Scenario,
     pub rules: Ruleset,

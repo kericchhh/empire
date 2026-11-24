@@ -7,13 +7,14 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::def::{self, DefinitionError, invalid, unique, unknown};
 use crate::ids::*;
 
 const STANDARD: &str = include_str!("../rules/standard.yaml");
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Ruleset {
     /// Numbers every empire carries.
@@ -30,7 +31,7 @@ pub struct Ruleset {
     pub limits: Limits,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct StatDef<Id> {
     pub id: Id,
@@ -58,7 +59,7 @@ impl<Id> StatDef<Id> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct OfficeDef {
     pub id: OfficeId,
@@ -81,7 +82,7 @@ pub struct OfficeDef {
     pub region_sight: RegionSight,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionSight {
     /// Every region the holder's empire owns.
@@ -91,7 +92,7 @@ pub enum RegionSight {
     Home,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ActionDef {
     pub id: ActionId,
@@ -113,7 +114,7 @@ pub struct ActionDef {
     pub secret: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     #[default]
@@ -126,7 +127,7 @@ pub enum TargetKind {
     OwnCharacter,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ChoiceKind {
     /// An office the ruleset lists, to move the target character into.
@@ -134,7 +135,7 @@ pub enum ChoiceKind {
 }
 
 /// A change written in a ruleset, resolved to concrete targets at run time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct EffectDef {
     pub target: EffectTarget,
@@ -144,7 +145,7 @@ pub struct EffectDef {
     pub scale_by: Option<ValueRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectTarget {
     /// A metric of the empire in scope: the actor's, or the one a rule is evaluating.
@@ -160,7 +161,7 @@ pub enum EffectTarget {
     TargetResource(ResourceId),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueRef {
     /// A metric of the empire in scope.
@@ -169,7 +170,7 @@ pub enum ValueRef {
     Stat(StatId),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct RuleDef {
     pub id: RuleId,
@@ -191,7 +192,7 @@ fn one() -> f64 {
     1.0
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleScope {
     /// Evaluated once for every empire.
@@ -201,7 +202,7 @@ pub enum RuleScope {
     EachRegion,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Condition {
     pub value: ValueRef,
@@ -224,7 +225,7 @@ impl Condition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields, default)]
 pub struct Limits {
     pub orders_per_character: usize,

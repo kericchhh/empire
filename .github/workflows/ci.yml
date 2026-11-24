@@ -64,6 +64,10 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo nextest run --workspace --locked --no-tests=fail
       - run: cargo test --workspace --doc --locked
+      - name: Bindings are up to date
+        run: |
+          stale=$(git status --porcelain -- app/src/bindings)
+          [ -z "$stale" ] || { echo "::error::app/src/bindings is stale: run 'cargo test -p empire-app bindings' and commit it:"; echo "$stale"; exit 1; }
       - name: No pending snapshots
         run: |
           pending=$(find . -path ./target -prune -o \( -name '*.snap.new' -o -name '*.pending-snap' \) -print)
