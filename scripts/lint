@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+failed=0
+rule() {
+  local pattern=$1 allowed=$2 fix=$3 test_dir='(^|/)tests/' file line tests
+  while IFS=: read -r file line _; do
+    [[ $file =~ $allowed || $file =~ $test_dir ]] && continue
+    tests=$(awk '/^#\[cfg\(test\)\]$/ { t = NR; next } t == NR - 1 && /^mod tests/ { print t; exit }' "$file")
+    [ -n "$tests" ] && [ "$line" -gt "$tests" ] && continue
+    echo "$file:$line: $fix" >&2
+    failed=1
+  done < <(git grep -nE "$pattern" -- '*.rs' || true)
+}
+
+rule 'Visibility::' '^crates/sim-core/src/(engine|perceive)\.rs$' \
+  'build a Visibility only in engine.rs and the sight module (perceive.rs): ask the sight module who sees the event'
+
+[ $failed = 0 ] && echo "lint: ok"
+exit $failed
