@@ -77,7 +77,7 @@ jobs:
           scripts/empire doctor | jq -e '.status == "healthy"'
           scripts/empire tool princeps look '{}' | jq -e '.perception.seat == "princeps"'
           scripts/empire tick 1 | jq -e '.closed == [1]'
-          ! scripts/empire tool princeps nosuchtool '{}'
+          if scripts/empire tool princeps nosuchtool '{}'; then exit 1; fi
           scripts/empire stop
       - name: No pending snapshots
         run: |
