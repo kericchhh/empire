@@ -588,11 +588,7 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
                 acted.insert(character);
                 match resolve_action(w, &log.state, character, action, target.as_deref()) {
                     Ok((adef, effects)) => (
-                        if adef.secret {
-                            seat_only
-                        } else {
-                            Visibility::Empire(log.state.characters[character].empire.clone())
-                        },
+                        action_visibility(w, &log.state, character, adef, target.as_deref()),
                         EventKind::ActionResolved {
                             character: character.clone(),
                             action: action.clone(),
@@ -625,26 +621,23 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
         log.push(by_seat(tick, &input.seat, visibility, kind));
     }
 
-    let idle: Vec<(CharacterId, ActionId, EmpireId)> = state
+    let idle: Vec<(CharacterId, ActionId)> = state
         .characters
         .iter()
         .filter(|(c, _)| !acted.contains(c))
         .filter_map(|(c, cs)| {
             let action = w.rules.office(&cs.office)?.default_action.clone()?;
-            Some((c.clone(), action, cs.empire.clone()))
+            Some((c.clone(), action))
         })
         .collect();
-    for (c, action, empire) in idle {
+    for (c, action) in idle {
         if let Ok((adef, effects)) = resolve_action(w, &log.state, &c, &action, None) {
-            let seat = w.seat_of(&c).map(|s| s.id.clone());
             log.push(Event {
                 tick,
-                cause: seat.clone().map_or(Cause::System, Cause::Seat),
-                visibility: if adef.secret {
-                    Visibility::Seats(seat.into_iter().collect())
-                } else {
-                    Visibility::Empire(empire)
-                },
+                cause: w
+                    .seat_of(&c)
+                    .map_or(Cause::System, |s| Cause::Seat(s.id.clone())),
+                visibility: action_visibility(w, &log.state, &c, adef, None),
                 kind: EventKind::ActionResolved {
                     character: c,
                     action,
@@ -738,6 +731,35 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
     log.push(system(tick, EventKind::TickEnded { streaks }));
     log.push(system(tick.next(), EventKind::TickStarted));
     log.events
+}
+
+fn action_visibility(
+    w: &World,
+    state: &State,
+    actor: &CharacterId,
+    adef: &ActionDef,
+    target: Option<&str>,
+) -> Visibility {
+    let empire = &state.characters[actor].empire;
+    let foreign = target
+        .filter(|_| adef.target == TargetKind::Character)
+        .map(CharacterId::from)
+        .filter(|t| &state.characters[t].empire != empire);
+    match (adef.secret, foreign) {
+        (true, t) => Visibility::Seats(
+            std::iter::once(actor)
+                .chain(&t)
+                .filter_map(|c| w.seat_of(c).map(|s| s.id.clone()))
+                .collect(),
+        ),
+        (false, None) => Visibility::Empire(empire.clone()),
+        (false, Some(t)) => Visibility::Empires(
+            BTreeSet::from([empire, &state.characters[&t].empire])
+                .into_iter()
+                .cloned()
+                .collect(),
+        ),
+    }
 }
 
 fn author_only(w: &World, character: &CharacterId) -> Visibility {

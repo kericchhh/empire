@@ -132,6 +132,7 @@ pub fn can_see(w: &World, seat: &SeatId, e: &Event) -> bool {
         Visibility::Public => true,
         Visibility::Empire(empire) => s.empire == Some(empire),
         Visibility::Seats(seats) => seats.contains(seat),
+        Visibility::Empires(empires) => s.empire.is_some_and(|e| empires.contains(e)),
     }
 }
 
@@ -773,6 +774,45 @@ mod tests {
             })
         );
         assert_eq!(taxed[1].scaled_by, None);
+    }
+
+    #[test]
+    fn a_secret_act_on_a_foreign_character_reaches_its_seat_but_no_number_of_the_actor() {
+        let mut s = Sim::rome(3);
+        s.close(&[act("senate", "piso", "bribe", Some("phraates"))]);
+        let king = recent(&s, "parthia");
+        assert!(
+            king.contains("Bribe on Phraates IV (Personal fortune of Phraates IV +10)"),
+            "{king}"
+        );
+        assert!(!king.contains("Influence"), "{king}");
+        assert!(metric_ids(&view(&s, "parthia"), "rome").is_empty());
+        for seat in ["pretender", "villages", "princeps"] {
+            assert!(!recent(&s, seat).contains("Bribe"), "{seat}");
+        }
+        assert!(recent(&s, "senate").contains("Bribe on Phraates IV"));
+    }
+
+    #[test]
+    fn an_open_act_on_a_foreign_character_is_seen_by_both_empires() {
+        let mut s = Sim::rome(3);
+        let events = s.close(&[act("poet", "virgil", "denounce", Some("phraates"))]);
+        let seen_by = events.iter().find_map(|e| match &e.kind {
+            EventKind::ActionResolved { action, .. } if action.as_str() == "denounce" => {
+                Some(&e.visibility)
+            }
+            _ => None,
+        });
+        let both = Visibility::Empires(vec!["parthia".into(), "rome".into()]);
+        assert_eq!(seen_by, Some(&both));
+        let line = "Publius Vergilius Maro: Denounce on Phraates IV";
+        for seat in ["princeps", "senate", "parthia", "pretender", "villages"] {
+            assert!(recent(&s, seat).contains(line), "{seat}");
+        }
+        let king = recent(&s, "parthia");
+        assert!(king.contains("(Influence of Phraates IV -1)"), "{king}");
+        assert!(!king.contains("Cultural flourishing"), "{king}");
+        assert!(recent(&s, "princeps").contains("(Cultural flourishing of Rome +0.01)"));
     }
 
     #[test]
