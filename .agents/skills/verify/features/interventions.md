@@ -6,13 +6,10 @@ The app's world screen submits interventions through `POST /api/intervene`; the 
 
 ## Driving it
 
-With a running world, use its state directory (the `state_dir` field from `scripts/empire start`) and POST `{"title":"A storm","text":"Ships are delayed","effects":[],"empire":"rome"}` to `/api/intervene` with the admin bearer token:
+With a running world, POST through the admin API CLI:
 
 ```sh
-state=/tmp/empire-control-$UID
-curl -sf -X POST -H "Authorization: Bearer $(cat "$state/admin")" -H 'content-type: application/json' \
-  "http://127.0.0.1:$(cat "$state/port")/api/intervene" \
-  -d '{"title":"A storm","text":"Ships are delayed","effects":[],"empire":"rome"}'
+scripts/empire api POST /api/intervene '{"title":"A storm","text":"Ships are delayed","effects":[],"empire":"rome"}'
 ```
 
 For the desktop path, use the World screen's intervention form. Inspect resulting events through `GET /api/events?after=0&limit=500` or `scripts/empire chronicle`.
