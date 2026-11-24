@@ -23,8 +23,14 @@ check() {
 }
 
 good=$(cat $fixtures/good.md)
-check "PR #7 defers without an issue" fail "open an issue and end the finding with 'Deferred #<issue>'" "$(cat $fixtures/pr7.md)" e107f38..e107f38
-check "e107f38 weakens a rule without saying so" fail "(AGENTS.md CODE_RULES.md), so add '## Rule changes'" "$good" e107f38^..e107f38
+check "PR #7 defers without an issue" fail "open an issue and end it with 'Deferred #<issue>'" "$(cat $fixtures/pr7.md)" e107f38..e107f38
+check "e107f38 weakens a rule without saying so" fail "AGENTS.md CODE_RULES.md), so add '## Rule changes'" "$good" e107f38^..e107f38
 check "a body in the new format passes" pass "ok" "$good" e107f38..e107f38
 check "a rule change that says so passes" pass "ok" "$good"$'\n\n## Rule changes\n\nThe ts-rs rule is dropped: the app has no generator yet.' e107f38^..e107f38
+review() { awk -v r="$1" '/^## Review/ { print; print ""; print r; print ""; skip = 1; next } /^## / { skip = 0 } !skip' <<<"$good"; }
+check "a heading in a code block is no section" fail "add '## Review'" $'## Verified\n\n```\n## Review\nNo findings\n```\n\n## Reflect\n\nnone' e107f38..e107f38
+check "a numbered finding needs an outcome" fail "a finding has no outcome" "$(review '1. bug: still open')" e107f38..e107f38
+check "outcomes may be bold, detailed or wrapped" pass "ok" "$(review $'- nit: x. **Fixed.**\n  - detail: the cause was y\n- bug: a long finding\n  that wraps. Fixed\n```diff\n- old line\n```')" e107f38..e107f38
+check "no findings is an outcome" pass "ok" "$(review '- No findings')" e107f38..e107f38
+check "a CI change is a rule change" fail ".github/workflows/ci.yml" "$good" 5388ade^..5388ade
 exit $failed

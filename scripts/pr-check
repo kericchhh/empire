@@ -7,24 +7,36 @@ files=$(gh pr diff "$pr" --name-only)
 
 failed=0
 fail() { echo "pr-check: $*" >&2; failed=1; }
-section() { awk -v h="$1" '/^## / { on = ($0 ~ "^## " h "[[:space:]]*$"); next } on' <<<"$body"; }
+section() {
+  awk -v h="$1" -v code="${2:-1}" '
+    /^[[:space:]]*(```|~~~)/ { f = !f; if (on && code) print; next }
+    f { if (on && code) print; next }
+    /^## / { on = ($0 ~ "^## " h "[[:space:]]*$"); next }
+    on' <<<"$body"
+}
+findings() {
+  section Review 0 | awk '
+    function flush() { if (item != "") print item; item = "" }
+    /^([-*+]|[0-9]+[.)]) / { flush(); item = $0; nested = 0; next }
+    /^[[:space:]]+([-*+]|[0-9]+[.)]) / { nested = 1; next }
+    /^[[:space:]]+[^[:space:]]/ { if (!nested && item != "") { sub(/^[[:space:]]+/, " "); item = item $0 }; next }
+    /^[[:space:]]*$/ { next }
+    { flush() }
+    END { flush() }'
+}
 present() { [ -n "$(section "$1" | tr -d '[:space:]')" ]; }
 
 present Verified || fail "add '## Verified' with each verify command and the output lines that prove the claim"
 present Review || fail "add '## Review' with each finding and its outcome, or 'No findings'"
 present Reflect || fail "add '## Reflect': for each finding, what would have caught it first and where that is now encoded"
 
-outcome='(^|[^[:alnum:]])(Fixed|Answered: .*[^[:space:]]|Deferred #[0-9]+)\.?[[:space:]]*$'
+outcome='(^|[^[:alnum:]])(Fixed|Answered: .*[^[:space:]]|Deferred #[0-9]+|No findings)$'
 while IFS= read -r finding; do
-  [[ $finding =~ $outcome ]] && continue
-  if [[ $finding =~ [Dd]efer ]]; then
-    fail "a deferred finding names no issue: open an issue and end the finding with 'Deferred #<issue>': $finding"
-  else
-    fail "a finding has no outcome: end it with 'Fixed', 'Answered: <reason>' or 'Deferred #<issue>': $finding"
-  fi
-done < <(section Review | grep -E '^[[:space:]]*[-*+] ')
+  [[ $(sed -E 's/[[:space:]*_`.]+$//' <<<"$finding") =~ $outcome ]] \
+    || fail "a finding has no outcome: end it with 'Fixed', 'Answered: <reason>', or open an issue and end it with 'Deferred #<issue>': $finding"
+done < <(findings)
 
-rules=$(grep -E '^(CODE_RULES\.md|AGENTS\.md|\.agents/skills/.*|(.*/)?clippy\.toml|deny\.toml)$' <<<"$files" || true)
+rules=$(grep -E '^(CODE_RULES\.md|AGENTS\.md|\.agents/skills/.*|(.*/)?clippy\.toml|deny\.toml|\.github/workflows/.*|scripts/(test-)?pr-check|scripts/fixtures/pr-check/.*)$' <<<"$files" || true)
 [ -z "$rules" ] || present 'Rule changes' \
   || fail "this PR changes rule files ($(paste -sd " " <<<"$rules")), so add '## Rule changes': which rule changed, how, and why"
 
