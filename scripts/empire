@@ -68,7 +68,8 @@ case "$cmd" in
     if [[ ! -d $state ]]; then (umask 077; mkdir -p "$state"); fi
     scenario=$(realpath "$scenario")
     detach=(); command -v setsid >/dev/null 2>&1 && detach=(setsid) || detach=(nohup)
-    "${detach[@]}" target/debug/sim-server run --db "$state/world.db" --scenario "$scenario" --seed "$seed" --bind '127.0.0.1:0' --tick-seconds "$tick_seconds" >"$state/out" 2>"$state/log" </dev/null &
+    bin=$(cargo metadata -q --format-version 1 --no-deps | jq -r .target_directory)/debug/sim-server
+    "${detach[@]}" "$bin" run --db "$state/world.db" --scenario "$scenario" --seed "$seed" --bind '127.0.0.1:0' --tick-seconds "$tick_seconds" >"$state/out" 2>"$state/log" </dev/null &
     echo $! >"$state/pid"
     ready=false
     for _ in $(seq 101); do
