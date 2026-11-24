@@ -23,8 +23,9 @@ default is specific to this checkout and is removed by stop.
 EOF
 }
 
-command -v curl >/dev/null || { echo 'scripts/empire requires curl'; exit 2; }
-command -v jq >/dev/null || { echo 'scripts/empire requires jq'; exit 2; }
+for tool in curl jq; do
+  command -v $tool >/dev/null || { printf '{"error":"scripts/empire requires %s","next":"Install %s"}\n' $tool $tool >&2; exit 2; }
+done
 fail() { jq -cn --arg error "$1" --arg next "$2" '{error: $error, next: $next}' >&2; exit 2; }
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$root"
@@ -96,14 +97,15 @@ case "$cmd" in
       --bind 127.0.0.1:0 --tick-seconds "$tick_seconds" >"$state/out" 2>"$state/log" </dev/null &
     echo $! >"$state/pid"
     abort() {
+      local log
       kill "$(cat "$state/pid")" 2>/dev/null || true
-      cat "$state/log" >&2
+      log=$(tail -n 20 "$state/log")
       rm -rf "$state"
-      fail "$1" "Check the cargo output and the scenario, then retry scripts/empire start"
+      fail "$1${log:+: $log}" "Fix the scenario or the build, then retry scripts/empire start"
     }
     # The seat tokens are complete once a blank line follows their heading.
     for ((i = 0; i < 100; i++)); do
-      awk '/^Seat tokens:/ {s = 1} s && /^$/ {f = 1} END {exit !f}' "$state/out" && break
+      awk '/^Seat tokens:/ {s = 1} s && /^$/ {f = 1} END {exit !f}' "$state/out" 2>/dev/null && break
       kill -0 "$(cat "$state/pid")" 2>/dev/null || abort "the world failed to start"
       sleep 0.1
     done
@@ -165,5 +167,5 @@ case "$cmd" in
     rm -rf "$state"
     jq -cn '{status: "stopped", state_removed: true}'
     ;;
-  *) usage >&2; fail "unknown command: ${cmd:-<empty>}" "Run scripts/empire --help" ;;
+  *) fail "unknown command: ${cmd:-<empty>}" "Run scripts/empire --help" ;;
 esac
