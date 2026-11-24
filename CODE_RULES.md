@@ -1,70 +1,86 @@
 # Code rules
 
-Apply every rule that touches the code you change. Finish a change only when `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --workspace` all pass, and, when `app/src` changed, `tsc --noEmit` in `app/`.
+Apply every rule that touches the code you change. Each rule names what enforces it: a lint, a test, a CI job, or `judgment`, which the `review` skill checks and whose example shows the failure to look for. A change is finished when CI's `ci-success` would pass: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `tsc --noEmit` in `app/` when `app/src` changed.
 
 ## Determinism (`sim-core`)
 
-The **replay invariant**: replaying the full event log from an empty world produces state identical to the live state. A proptest enforces it, and every change keeps that test passing.
-
-- `sim-core` is **pure**: its only inputs are state, events and a seed. File, network and environment access, wall-clock time and async all live in `sim-server`.
-- Take randomness only from the seeded ChaCha RNG. Derive a separate stream per `(seed, tick, purpose)` so that adding a new consumer leaves the existing streams unchanged.
-- Iterate in a stable order: `BTreeMap`, `BTreeSet` or a sorted `Vec`.
-- `crates/sim-core/clippy.toml` enforces purity: it bans `HashMap`, `HashSet`, wall-clock time, the environment, files, the network and unseeded `rand`.
-- Use rayon only for updates where each element is independent. Do reductions (sums, totals) sequentially, in a fixed order.
+| Rule | Enforced by |
+|---|---|
+| **Replay invariant:** replaying the event log from an empty world gives the live state, and a state snapshot round-trips. | proptests `replaying_a_serialized_log_rebuilds_the_live_state`, `a_state_snapshot_round_trips_through_json` (`sim-core/tests/replay.rs`) |
+| `sim-core` is pure: its inputs are state, events and a seed. Files, network, environment, wall-clock time and async live in `sim-server`. | `crates/sim-core/clippy.toml`; async: judgment, e.g. an `async fn` that awaits a timer in the engine |
+| Randomness comes only from `engine::roll`, one stream per `(seed, tick, purpose)`, so a new consumer leaves the others unchanged. | `crates/sim-core/clippy.toml` (bans unseeded `rand`); test `adding_a_rule_does_not_shift_other_rules_random_draws` |
+| Iterate in a stable order: `BTreeMap`, `BTreeSet` or a sorted `Vec`. | `crates/sim-core/clippy.toml` (bans `HashMap`, `HashSet`); test `close_tick_is_deterministic_and_order_independent_across_seats` |
+| Use rayon only where each element is independent; reduce sequentially in a fixed order. | judgment, e.g. a parallel `f64` sum whose total changes with thread scheduling |
 
 ## Events
 
-- `apply(&mut State, &Event)` is the only way state changes, and it never fails. Validation happens before an event is created.
-- Name events as past-tense facts: `GrainShortfall`, `EdictIssued`, `SeatJoined`.
-- Every event records its cause: a seat, a rule id, the game master, or a user intervention.
-- The event schema is permanent. Add fields with `#[serde(default)]` and add new variants freely. To change a variant's meaning, add a new variant and keep the old one replayable, so logs from older versions still load.
+| Rule | Enforced by |
+|---|---|
+| `State::apply(&mut self, &Event)` is the only way state changes, and it never fails; validate before creating the event. | its `()` return; the replay proptest |
+| Name events as past-tense facts: `GrainShortfall`, `EdictIssued`, `SeatJoined`. | judgment, e.g. `RaiseTaxes`, a command, where the fact is `TaxesRaised` |
+| Every event records its cause: a seat, a rule id, the game master or a user intervention. | compiler: `Event::cause` is a required `Cause` |
+| The event schema is permanent: add fields with `#[serde(default)]` and new variants freely; to change a variant's meaning, add a variant and keep the old one replayable. | judgment, e.g. turning a field from a delta into a total, so old logs replay to other numbers |
 
 ## Seats and MCP tools
 
-- A tool works out its seat from the token and builds its output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` is the only place where visibility is decided.
-- `no_seat_sees_anything_hidden_of_another_empire` in `crates/sim-core/tests/replay.rs` guards the fog of war. Any new foreign-owned state or event field gets shifted in its `shift_foreign`.
-- Tool inputs and outputs derive `serde` and `schemars`. Write tool descriptions for an agent reading them: what the tool does, and when to call it.
-- Make every `wait_for_turn` result **self-contained**. An agent with a fresh context and only that result must be able to play the turn correctly.
-- Treat text written by agents as untrusted in-world speech. Cap its length, and when showing it to another seat, present it as a quoted message from that character.
-- Long-poll tools return a "not yet, call again" result within 30 seconds, so they finish before client timeouts.
+| Rule | Enforced by |
+|---|---|
+| A tool finds its seat from the token and builds output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` alone decides visibility, and new foreign-owned state or event fields are shifted in `shift_foreign`. | proptest `no_seat_sees_anything_hidden_of_another_empire` (`sim-core/tests/replay.rs`) |
+| Tool inputs and outputs derive `serde` and `schemars`. | compiler: rmcp's `Parameters` and `Json` require `JsonSchema` |
+| Tool descriptions are written for an agent: what the tool does and when to call it. | judgment, e.g. "Ends the turn." with no word on what happens to queued orders |
+| Every `wait_for_turn` result is self-contained: an agent with a fresh context and only that result can play the turn. | judgment (`verify` reads one), e.g. a result that says "act now" but omits the actions the office allows |
+| Agent text is untrusted in-world speech: capped, and shown to another seat as a quoted message from its character. | tests `message_text_is_bounded`, `agent_text_cannot_forge_chronicle_lines`, `chat_is_capped_per_seat_per_tick` |
+| Long-poll tools return "not yet, call again" within 30 seconds. | test `wait_for_turn_times_out_while_others_decide_and_wakes_when_the_tick_closes` |
 
 ## Agent runs (`sim-runner`)
 
-- Start every agent process through `turn::sandbox`, and start agents only when `check_sandbox` passes. `crates/sim-runner/clippy.toml` bans `Command::new` elsewhere; a process that is not an agent run carries an `#[expect]` with its reason.
-- A run's network is the gate's (`net`). An agent kind lists the hosts it needs in its `HOSTS`, confirmed against the gate's refusal log in a live run, and nothing more.
-- Nothing of the user reaches a run: no host environment variable beyond the sandbox's list, no host path, no file of theirs, no account detail. A new agent kind or flag needs a test that proves it.
-- A run knows only its own seat token, passed on stdin, never on the command line.
-- The only credentials Empire stores are the user's agent logins, in Empire's data directory, readable only by the user. A run gets a copy, never a mount of them.
-- Run output and logs are private to the user (`fs::private_dir`, `fs::private_file`), since they hold seat tokens and secrets.
+| Rule | Enforced by |
+|---|---|
+| Start every agent process through `turn::sandbox`, and only once `check_sandbox` passes. A process that is not an agent run carries an `#[expect]` with its reason. | `crates/sim-runner/clippy.toml` (bans `Command::new`); the `check_sandbox` gate: judgment, e.g. a new run path that skips the check `host.rs` and `author.rs` make |
+| A run's network is the gate's (`net`). An agent kind's `HOSTS` lists only the hosts a live run's refusal log confirmed. | tests `a_run_reaches_the_world_and_its_provider_only`, `the_proxy_joins_admitted_hosts_only`; the host list: judgment, e.g. a whole `*.cdn` domain added on a guess |
+| Nothing of the user reaches a run: no host environment variable beyond the sandbox's list, no host path, no file, no account detail. A new agent kind or flag needs a test that proves it. | tests in `sandbox.rs`, `a_run_gets_only_the_turn_tools_and_nothing_of_the_users`, `runs_are_sandboxed_with_only_the_login_and_private_logs` |
+| A run knows only its own seat token, on stdin, never on the command line. | test `the_token_travels_in_the_prompt_never_on_the_command_line` |
+| The only credentials Empire stores are the user's agent logins, in its data directory, readable only by the user; a run gets a copy, never a mount. | tests `a_saved_token_is_private_and_reads_back`, `runs_are_sandboxed_with_only_the_login_and_private_logs` |
+| Run output and logs are private (`fs::private_dir`, `fs::private_file`): they hold seat tokens. | test `runs_are_sandboxed_with_only_the_login_and_private_logs` |
 
 ## Scenario-agnostic code
 
-- Rust and TS code refers to offices, metrics, resources and regions by ids taken from the ruleset and the scenario. Setting-specific names and lore belong in `scenarios/`.
-- A new mechanic is a generic rule, action or office in `crates/sim-core/rules/standard.yaml`, or new engine code when the rule format cannot express it. Scenarios never carry mechanics.
+| Rule | Enforced by |
+|---|---|
+| Rust and TS code names offices, metrics, resources and regions by ids from the ruleset and scenario; setting names and lore live in `scenarios/`. | judgment, e.g. `if office == "consul"` |
+| A new mechanic is a generic rule, action or office in `rules/standard.yaml`, or engine code; scenarios carry no mechanics. | `scenarios` CI job: the scenario schema has no rule fields and rejects unknown ones |
 
 ## Rust style
 
-- Edition 2024, stable toolchain. Shared dependencies are declared in `[workspace.dependencies]` and added only to the crate that uses them.
-- Use newtype ids (`SeatId`, `RegionId`, `Tick`) at every boundary.
-- Errors: library crates use `thiserror` enums, and `anyhow` appears only in binary `main`s (`deny.toml` and `crates/sim-server/clippy.toml` enforce it). Outside tests, handle every `Result`. Where an invariant truly guarantees success, use `expect("<why this holds>")`.
-- Log with `tracing`, using one span per tick and per seat request.
+| Rule | Enforced by |
+|---|---|
+| Edition 2024, stable toolchain; shared dependencies sit in `[workspace.dependencies]`, added only to the crate that uses them. | judgment, e.g. a crate pinning its own `serde = "1"` |
+| Newtype ids (`SeatId`, `RegionId`, `Tick`) at every boundary. | judgment, e.g. `fn seat(id: &str)` on a public API |
+| Library crates return `thiserror` enums; `anyhow` only in binary `main`s. | `deny.toml`, `crates/sim-server/clippy.toml` |
+| Outside tests, handle every `Result`; where an invariant guarantees success, `expect("<why this holds>")`. | rustc `unused_must_use` under `-D warnings`; the rest judgment, e.g. `let _ = store.append(&e)` dropping a failed write |
+| Log with `tracing`, one span per tick and per seat request. | judgment, e.g. `println!` in the tick loop |
 
 ## Comments
 
-Write almost none. A comment records only what the code cannot say: a reason, an invariant, a non-obvious constraint, in one short line. Never restate what the code does. Doc comments on public items describe behaviour the signature does not show. CI and other YAML files carry no comments, except the `# vX.Y.Z` next to a SHA-pinned action.
+| Rule | Enforced by |
+|---|---|
+| Write almost none: only what the code cannot say (a reason, an invariant, a non-obvious constraint), in one short line. Doc comments describe behaviour the signature does not show. | judgment, e.g. `// increment the tick` above `tick += 1` |
+| CI and other YAML files carry no comments, except the `# vX.Y.Z` beside a SHA-pinned action. | judgment, e.g. `# install deps` above a step |
 
 ## Tests
 
-Every feature, public API, service, MCP tool and HTTP endpoint ships with tests that exercise its behaviour: the outcomes a user or agent relies on, including rejections and edge cases. A test earns its place by failing when that behaviour breaks.
-
-- Put unit tests next to the code they test.
-- Test MCP tools and HTTP endpoints end to end through a real client against a server on an ephemeral port.
-- **Golden runs:** an `insta` snapshot of the event log after N ticks of a fixture scenario with a fixed seed. Accept a snapshot diff only when the change explains it.
-- A proptest covers the replay invariant and snapshot round-trips.
+| Rule | Enforced by |
+|---|---|
+| Every feature, public API, service, MCP tool and HTTP endpoint ships with tests of the outcomes a user or agent relies on, rejections and edge cases included; a test earns its place by failing when that breaks. | judgment (the `slice` red step), e.g. a test that only checks the call returns `Ok` |
+| Unit tests sit next to the code they test. | judgment, e.g. a private helper tested from `tests/` through a `pub` added for it |
+| MCP tools and HTTP endpoints are tested end to end through a real client against a server on an ephemeral port. | judgment, e.g. calling the handler function directly; `sim-server/tests/e2e.rs` is the pattern |
+| Golden runs: an `insta` snapshot of the event log after N ticks of a fixture scenario; accept a diff only when the change explains it. | test `rome_and_parthia_left_to_the_rules_alone`; `test` CI job fails on pending snapshots |
 
 ## App (`app/`)
 
-- The Rust backend (`app/src-tauri`) exposes Tauri commands that call `sim_server` and `sim_runner`; it holds no game logic of its own.
-- The UI loads state through those commands and refreshes when the backend emits `world-event`. User actions go through commands such as `intervene`, and each one becomes an event on the server.
-- The TS types for server data live in `app/src/api.ts`. Keep them in step with the Rust types they mirror.
-- Components style themselves through the CSS variables that come from the scenario theme.
+| Rule | Enforced by |
+|---|---|
+| The Rust backend (`app/src-tauri`) exposes Tauri commands that call `sim_server` and `sim_runner`, and holds no game logic. | judgment, e.g. a command that computes a metric itself |
+| The UI loads state through those commands and refreshes on `world-event`; user actions go through commands such as `intervene`, each becoming an event on the server. | judgment, e.g. the UI editing its copy of the state without an event |
+| The TS types for server data live in `app/src/api.ts`, kept in step with the Rust types they mirror. | judgment (until #39), e.g. a Rust field renamed while `api.ts` keeps the old name |
+| Components style themselves through the CSS variables from the scenario theme. | judgment, e.g. a hard-coded `#c9a227` gold |
