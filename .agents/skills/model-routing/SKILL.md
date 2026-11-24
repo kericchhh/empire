@@ -28,6 +28,7 @@ Antigravity also lists `gemini-4-hydrogen`, two Claude models and `gpt-oss-120b-
 ## Rules
 
 - Heavy and Coding tiers write and review code. Light researches and looks things up.
+- A slice builder (issue to PR, several stages) is Claude. `gpt-6-luna` reviews, re-checks and makes bounded fixes: as a builder of the "Trustworthy agents" slices #41 and #43 it stopped after reading or a partial start, three times, with nothing committed.
 - Code quality comes first: keep a coding or review task in its tier, whatever the quota.
 - If a tier's model is unavailable, use another model in that tier if one is listed. Otherwise report the gap. Never fall back to a weaker model silently.
 - Light research prefers `gemini-3.8-flash`, and falls back to `claude-haiku-5-5` if Antigravity is unavailable. That fallback stays in Light.
