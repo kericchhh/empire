@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pr=${1:?usage: scripts/merge-ready <pr-number>}
+json=$(gh pr view "$pr" --json headRefOid,comments,statusCheckRollup)
+head=$(jq -r .headRefOid <<<"$json")
+git fetch -q origin main "$head"
+pid=$(git diff origin/main..."$head" | git patch-id --stable | cut -d' ' -f1)
+[ -n "$pid" ] || { echo "merge-ready: $head has no diff against origin/main" >&2; exit 1; }
+echo "head $head patch-id $pid"
+
+failed=0
+fail() { echo "merge-ready: $*" >&2; failed=1; }
+
+ci=$(jq -r '[.statusCheckRollup[] | select(.name == "ci-success") | .conclusion] | unique | join(",")' <<<"$json")
+[ "$ci" = SUCCESS ] || fail "ci-success is ${ci:-not finished} on $head, not SUCCESS"
+
+verdict='' verifier=''
+read -r verdict verifier < <(jq -r --arg pid "$pid" '
+  [.comments[].body | gsub("\r"; "") | split("\n") as $l
+    | def field($k): $l | map(select(startswith($k + ": "))[($k | length) + 2:]) | first // "";
+    select(field("Verdict") != "") | {v: field("Verdict"), p: field("Patch-id"), who: field("Verifier")}]
+  | map(select(.p == $pid)) | last // empty | "\(.v) \(.who)"' <<<"$json") || true
+case $verdict in
+  "") fail "no verdict for patch-id $pid: a fresh agent that built none of it runs the slice skill's verify-verdict step" ;;
+  PASS | PASS+NOTES) [ -n "$verifier" ] || fail "the verdict for patch-id $pid names no Verifier" ;;
+  *) fail "the latest verdict for patch-id $pid is $verdict, not PASS or PASS+NOTES" ;;
+esac
+
+while IFS=$'\t' read -r sha builders; do
+  [ -n "$builders" ] || fail "commit $sha has no 'Builder: <run id>' trailer"
+  case " $builders " in
+    *" $verifier "*) [ -z "$verifier" ] || fail "verifier $verifier built commit $sha: the verdict must come from an agent that built none of the PR" ;;
+  esac
+done < <(git log --no-merges --format='%h%x09%(trailers:key=Builder,valueonly,separator=%x20)' origin/main.."$head")
+
+"$(dirname "$0")/pr-check" "$pr" >/dev/null || fail "scripts/pr-check $pr fails"
+
+[ $failed = 0 ] && echo MERGE-READY
+exit $failed
