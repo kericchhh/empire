@@ -43,6 +43,12 @@ pub struct CharacterState {
     pub region: RegionId,
     pub resources: BTreeMap<ResourceId, f64>,
     pub notes: Vec<String>,
+    #[serde(default = "alive")]
+    pub alive: bool,
+}
+
+fn alive() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -124,6 +130,7 @@ impl State {
                     region: c.region.clone(),
                     resources: initial(&rules.resources),
                     notes: Vec::new(),
+                    alive: true,
                 };
                 (c.id.clone(), cs)
             })
@@ -241,6 +248,11 @@ impl State {
             EventKind::OfficeChanged { character, to, .. } => {
                 if let Some(c) = self.characters.get_mut(character) {
                     c.office = to.clone();
+                }
+            }
+            EventKind::CharacterDied { character } => {
+                if let Some(c) = self.characters.get_mut(character) {
+                    c.alive = false;
                 }
             }
             EventKind::ActionRejected { .. } | EventKind::MessageSent { .. } => {}

@@ -25,7 +25,7 @@ export interface State {
   tick: number;
   empires: Record<Id, { metrics: Num }>;
   regions: Record<Id, { owner: Id; stats: Num }>;
-  characters: Record<Id, { empire: Id; office: Id; region: Id; resources: Num; notes: string[] }>;
+  characters: Record<Id, { empire: Id; office: Id; region: Id; resources: Num; notes: string[]; alive: boolean }>;
   joined: Id[];
   pending: Record<string, { character: Id; text: string; declared: number }>;
 }
@@ -39,9 +39,9 @@ export interface Perception {
   world: { name: string; date: string; tick: number };
   seat: Id; game_master: boolean; your_empire?: Id;
   empires: { id: Id; name: string; description: string; culture: Record<string, string>; metrics: Value[] }[];
-  you_play: (Character & { office_description: string; resources: Value[]; notes: string[] })[];
+  you_play: (Character & { office_description: string; resources: Value[]; notes: string[]; alive: boolean })[];
   regions: { id: Id; name: string; owner: Id; stats: Value[] }[];
-  people: { id: Id; name: string; title: string; office: string; empire: Id }[];
+  people: { id: Id; name: string; title: string; office: string; empire: Id; alive: boolean }[];
   recent: string[];
   pending_rulings: { id: string; character: Id; text: string }[];
   actions: { id: Id; name: string; description: string }[];
@@ -62,6 +62,7 @@ export type Target =
   | { metric: { empire: Id; metric: Id } }
   | { stat: { region: Id; stat: Id } }
   | { resource: { character: Id; resource: Id } };
+export interface Intervention { title: string; text: string; effects: { target: Target; delta: number }[]; empire: Id | null; deaths: Id[] }
 
 /** Whether an agent CLI is installed, and whether Empire holds a login for it. */
 export interface Provider { version: string | null; connected: boolean }
@@ -82,8 +83,7 @@ export const api = {
   overview: () => invoke<Overview>("overview"),
   seatView: (seat: Id) => invoke<TurnView>("seat_view", { seat }),
   chronicle: (after: number) => invoke<Chronicle>("chronicle", { after }),
-  intervene: (title: string, text: string, effects: { target: Target; delta: number }[], empire: Id | null) =>
-    invoke<number>("intervene", { title, text, effects, empire }),
+  intervene: (req: Intervention) => invoke<number>("intervene", { req }),
   advanceTick: () => invoke<number>("advance_tick"),
   providers: () => invoke<Providers>("providers"),
   saveClaudeToken: (token: string) => invoke<void>("save_claude_token", { token }),

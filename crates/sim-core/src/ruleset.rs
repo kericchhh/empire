@@ -28,6 +28,19 @@ pub struct Ruleset {
     pub rules: Vec<RuleDef>,
     #[serde(default)]
     pub limits: Limits,
+    /// Who takes an office when its last holder dies.
+    #[serde(default)]
+    pub succession: Option<Succession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Succession {
+    /// When every holder of this office in an empire is dead, it passes to a living
+    /// character of that empire who holds an appointable office.
+    pub office: OfficeId,
+    /// The candidate with the most of this resource succeeds; ties go to the lowest id.
+    pub rank_by: ResourceId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -312,6 +325,14 @@ impl Ruleset {
             ));
         }
 
+        if let Some(s) = &self.succession {
+            if self.office(&s.office).is_none() {
+                return Err(unknown("succession", "office", s.office.as_str()));
+            }
+            if self.resource(&s.rank_by).is_none() {
+                return Err(unknown("succession", "resource", s.rank_by.as_str()));
+            }
+        }
         for office in &self.offices {
             let ctx = format!("office `{}`", office.id);
             if let Some(a) = office.actions.iter().find(|a| self.action(a).is_none()) {
@@ -534,6 +555,17 @@ mod tests {
         assert!(matches!(
             with(|r| r.metrics[0].visible_to.push("pope".into())),
             Err(DefinitionError::Unknown { kind: "office", .. })
+        ));
+        assert!(matches!(
+            with(|r| r.succession.as_mut().unwrap().office = "pope".into()),
+            Err(DefinitionError::Unknown { kind: "office", .. })
+        ));
+        assert!(matches!(
+            with(|r| r.succession.as_mut().unwrap().rank_by = "mana".into()),
+            Err(DefinitionError::Unknown {
+                kind: "resource",
+                ..
+            })
         ));
         assert!(matches!(
             with(|r| r.actions[0].effects[0].scale_by = Some(ValueRef::Stat("wealthh".into()))),

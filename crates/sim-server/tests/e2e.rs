@@ -427,3 +427,51 @@ async fn a_head_of_state_appoints_over_mcp_and_the_appointee_gains_the_office() 
             .contains("Duke Bors becomes Commander (formerly Official).")
     );
 }
+
+#[tokio::test]
+async fn an_intervention_kills_the_ruler_and_the_heir_succeeds() {
+    let s = Server::start().await;
+    let r = s
+        .post(
+            "/intervene",
+            json!({ "title": "A fever", "deaths": ["merlin"] }),
+        )
+        .await;
+    assert_eq!(r.status(), 422);
+    assert!(r.text().await.unwrap().contains("unknown character"));
+    let r = s
+        .post(
+            "/intervene",
+            json!({ "title": "A fever", "deaths": ["queen"] }),
+        )
+        .await;
+    assert_eq!(r.status(), 200);
+
+    let (crown, rival, pirates) = (s.mcp().await, s.mcp().await, s.mcp().await);
+    let ct = s.tok("crown");
+    let queen = look(&crown, &ct).await["perception"]["you_play"][0].clone();
+    assert_eq!(queen["alive"], false);
+    let decree = json!({ "kind": "action", "character": "queen", "action": "issue_edict" });
+    let acted = ok(call(
+        &crown,
+        "act",
+        json!({ "seat_token": ct, "tick": 0, "orders": [decree] }),
+    )
+    .await);
+    assert_eq!(acted["results"][0]["error"], "`queen` is dead");
+    s.post("/tick", json!({})).await;
+
+    let duke = look(&rival, &s.tok("rival")).await["perception"].clone();
+    assert_eq!(duke["you_play"][0]["office"], "Head of state");
+    let seen = duke["recent"].to_string();
+    assert!(seen.contains("Queen Ada has died."), "{seen}");
+    assert!(seen.contains("Duke Bors becomes Head of state (formerly Official)."));
+    let abroad = look(&pirates, &s.tok("pirates")).await;
+    let text = abroad.to_string();
+    assert!(!text.contains("has died") && !text.contains("becomes Head of state"));
+    let people = abroad["perception"]["people"].to_string();
+    assert!(
+        people.contains("\"duke\"") && !people.contains("\"queen\""),
+        "{people}"
+    );
+}

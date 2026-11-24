@@ -114,6 +114,9 @@ pub enum EventKind {
         from: OfficeId,
         to: OfficeId,
     },
+    CharacterDied {
+        character: CharacterId,
+    },
     ActionRejected {
         character: CharacterId,
         action: ActionId,

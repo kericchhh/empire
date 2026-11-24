@@ -141,7 +141,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN" -H 'content-type: application/jso
   -d '{"title":"A plague ship docks at Ostia","empire":"rome","effects":[{"target":{"stat":{"region":"italia","stat":"unrest"}},"delta":0.2}]}'
 ```
 
-`empire` is optional: with it, only that empire's seats hear of the event.
+`empire` is optional: with it, only that empire's seats hear of the event. `deaths` lists the ids of characters who die; each death is known only to that character's empire, and the ruleset's succession fills a vacant head of state.
 
 ## Write a scenario
 

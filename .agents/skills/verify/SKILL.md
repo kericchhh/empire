@@ -33,5 +33,5 @@ Done when every claim has a command and output that shows it, and a bug fix also
 - A change to `HOSTS`, mounts or the environment needs a live run: `sim-server run --db <tmp> --scenario scenarios/rome.yaml --play-all claude:haiku --tick-seconds 120`, then read the gate's refusal log and the run logs under `<db>.runs/`. A live run spends the user's subscription, so ask before starting one.
 
 **App (`app/`)**
-- `pnpm --dir app exec tsc --noEmit`.
+- `pnpm --dir app exec tsc --noEmit`, after `pnpm --dir app install --frozen-lockfile` in a fresh worktree.
 - Launch with `pnpm --dir app tauri dev` and show the screen the change affects: a screenshot, or ask the user to look when no display is available.
