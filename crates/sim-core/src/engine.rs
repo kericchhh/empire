@@ -406,7 +406,7 @@ pub fn note(
 pub const MAX_INTERVENTION_DELTA: f64 = 1e9;
 
 /// A user-made event.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Intervention {
     pub title: String,
     #[serde(default)]
@@ -1873,7 +1873,9 @@ mod tests {
         assert!(!crown.you_play[0].alive);
         assert!(crown.you_play[0].actions.is_empty());
         assert!(
-            crown.empires[0].metrics.is_empty() && crown.regions.is_empty(),
+            crown.empires[0].metrics.is_empty()
+                && crown.regions.is_empty()
+                && crown.you_play[0].resources.is_empty(),
             "the dead see no numbers"
         );
         let known = |seat| -> Vec<(String, bool)> {

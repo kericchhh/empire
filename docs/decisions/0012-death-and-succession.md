@@ -15,6 +15,6 @@ Succession is a mechanic, so the ruleset names the office, never the engine. Onl
 ## Consequences
 
 - `CharacterDied` and the succession move are visible to the dead character's empire only, plus the game master. Contacts (#13) will decide what reaches other empires.
-- Abroad, only living holders of public offices are known. So a foreign ruler's death shows abroad as a change of who rules, without the chronicle line. `shift_foreign` therefore flips whether foreign holders of private offices live, but not of public ones.
+- Abroad, only living holders of public offices are known. So a foreign ruler's death shows abroad as a change of who rules, without the chronicle line, and while the office is vacant the ruler simply disappears from foreign views. `shift_foreign` therefore flips whether foreign holders of private offices live, but not of public ones.
 - Succession moves join the end-of-tick moves after appointments, and the moves pass reads each `from` again.
 - A seat whose characters are all dead still gets turns. Retiring it is left for later.

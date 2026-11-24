@@ -466,6 +466,12 @@ async fn an_intervention_kills_the_ruler_and_the_heir_succeeds() {
     let seen = duke["recent"].to_string();
     assert!(seen.contains("Queen Ada has died."), "{seen}");
     assert!(seen.contains("Duke Bors becomes Head of state (formerly Official)."));
-    let abroad = look(&pirates, &s.tok("pirates")).await.to_string();
-    assert!(!abroad.contains("has died") && !abroad.contains("becomes Head of state"));
+    let abroad = look(&pirates, &s.tok("pirates")).await;
+    let text = abroad.to_string();
+    assert!(!text.contains("has died") && !text.contains("becomes Head of state"));
+    let people = abroad["perception"]["people"].to_string();
+    assert!(
+        people.contains("\"duke\"") && !people.contains("\"queen\""),
+        "{people}"
+    );
 }

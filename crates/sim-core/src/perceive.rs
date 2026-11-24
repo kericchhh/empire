@@ -22,7 +22,7 @@ pub struct Perception {
     pub empires: Vec<EmpireView>,
     pub you_play: Vec<CharacterView>,
     pub regions: Vec<RegionView>,
-    /// Everyone this seat knows of: its own empire's people, and foreign holders of
+    /// Everyone this seat knows of: its own empire's people, and living foreign holders of
     /// public offices.
     pub people: Vec<Person>,
     /// What this seat saw happen during the previous and the current tick, oldest first.
@@ -174,7 +174,11 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
                 persona: c.persona.clone(),
                 goals: c.goals.clone(),
                 secrets: c.secrets.clone(),
-                resources: numbers(&rules.resources, |_| true, |r| cs.resources.get(r).copied()),
+                resources: numbers(
+                    &rules.resources,
+                    |_| cs.alive,
+                    |r| cs.resources.get(r).copied(),
+                ),
                 notes: cs.notes.clone(),
                 alive: cs.alive,
                 actions: office
@@ -377,12 +381,12 @@ impl Sight {
         let Some(empire) = sref.empire else {
             return Some(Self::all());
         };
-        let chars: Vec<_> = sref
+        let living: Vec<_> = sref
             .controls
             .iter()
-            .filter_map(|c| state.characters.get(c))
-            .filter(|c| c.alive)
+            .filter(|c| state.characters.get(*c).is_some_and(|c| c.alive))
             .collect();
+        let chars: Vec<_> = living.iter().map(|c| &state.characters[*c]).collect();
         let offices: BTreeSet<&OfficeId> = chars.iter().map(|c| &c.office).collect();
         let sees_empire = offices.iter().any(|o| {
             w.rules
@@ -409,7 +413,7 @@ impl Sight {
                     .map(|c| c.region.clone())
                     .collect()
             },
-            characters: sref.controls.iter().cloned().collect(),
+            characters: living.into_iter().cloned().collect(),
         })
     }
 
