@@ -2,16 +2,37 @@
 
 ## How to reach it
 
-Run `pnpm --dir app tauri dev`. `app/src/Home.tsx` owns saved-world selection and the create-world flow (scenario file or prompt, with optional agent setup). In `app/src/World.tsx`, the navigation opens Whole world, each empire, each `Seen by …` seat view, History, Make something happen, and Agents & access; the header also shows the date, turn, waiting seats, Next turn now and Close world. These commands call the Tauri backend in `app/src-tauri/src/main.rs`.
+`scripts/empire app --out FILE [--view TEXT]` opens a copy of the world `scripts/empire start` started in the real desktop app, under WebDriver on a headless Weston display, and saves a screenshot. Linux only: `tauri-driver` has no macOS WebDriver, so on macOS ask the user to look. One-time setup:
+
+```sh
+sudo pacman -S webkitgtk-6.0 weston        # Arch; Debian or Ubuntu: sudo apt install webkit2gtk-driver weston
+cargo install --locked tauri-driver --version 2.1.0
+export PATH="$HOME/.cargo/bin:$PATH"
+pnpm --dir app install
+```
+
+`app/src/Home.tsx` owns saved-world selection and the create-world flow. In `app/src/World.tsx`, the navigation opens Whole world, each empire, each `Seen by …` seat view, History, Make something happen, and Agents & access; the header shows the date, turn, waiting seats, Next turn now and Close world. These call the Tauri commands in `app/src-tauri/src/main.rs`.
 
 ## Driving it
 
-Open a saved world or create one from the app. In Whole world inspect empire summaries and recent events; select an empire or `Seen by …` seat to inspect its state or perception; History pages through events; Make something happen records an intervention; Agents & access shows each seat's status and lets you reveal/copy its token. The header's Next turn now force-closes a tick.
+Drive the world with `scripts/empire tool` and `tick`, then capture any navigation entry by its exact text:
+
+```sh
+evidence="${TMPDIR:-/tmp}/empire-evidence/<slug>"
+scripts/empire start
+scripts/empire app --view 'Seen by The Senate' --out "$evidence/senate.png"
+scripts/empire app --view History --out "$evidence/history.png"
+```
+
+Each call builds the app (`pnpm --dir app tauri build --debug --no-bundle`), opens the Saved tab, opens the copy (named `verify`), clicks the view, waits until nothing on the screen is loading, saves the PNG, and stops every process it started.
 
 ## Proof
 
-Capture the affected screen and the corresponding world state/event through the app or `scripts/empire chronicle`. Run `pnpm --dir app exec tsc --noEmit` for type checking.
+Open the PNG and check the claim in it; then link it in the PR (see Evidence in `../SKILL.md`). It prints `{"status":"captured","view":…,"out":…}`. Run `pnpm --dir app exec tsc --noEmit` for type checking.
 
 ## Gotchas
 
-App state comes from server/Tauri commands; user mutations should appear as server events. Theme terms and palette come from the scenario. Desktop launch requires the platform webview dependencies listed in `README.md`.
+- The app gets its own data directory under the state directory, so it never sees the user's saved worlds or agent logins; with no login, the rules play every seat and no subscription is spent.
+- It opens a copy of the world at the moment you call it; ticks closed later in the app do not reach the CLI's world.
+- `--view` takes the navigation text exactly; a wrong one fails and lists the views the app has.
+- Logs from the last call stay in `<state>/app/` (`build.log`, `driver.log`, `weston.log`) until `scripts/empire stop`.
