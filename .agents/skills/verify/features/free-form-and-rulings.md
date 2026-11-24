@@ -6,7 +6,7 @@ Start a scenario that defines a game-master seat (Rome has `gm`). A seat can sub
 
 ## Driving it
 
-Submit `scripts/empire tool princeps act '{"tick":0,"orders":[{"kind":"freeform","character":"augustus","text":"Call a council"}]}'`, close the tick, then call `scripts/empire tool gm look '{}'`. Use the pending ruling id and the current tick in `scripts/empire tool gm rule '{"tick":1,"rulings":[{"pending_id":"<id>","outcome":"The council meets","effects":[]}]}'`.
+Submit `scripts/empire tool princeps act '{"tick":0,"orders":[{"kind":"freeform","character":"augustus","text":"Call a council"}]}'`, close the tick, then call `scripts/empire tool gm look '{}'`. Use the pending ruling id and the current tick in `scripts/empire tool gm rule '{"tick":<current tick>,"rulings":[{"pending_id":"<id>","outcome":"The council meets","effects":[]}]}'`.
 
 ## Proof
 

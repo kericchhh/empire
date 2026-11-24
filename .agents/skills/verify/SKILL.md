@@ -9,23 +9,19 @@ Evidence comes from the real artifact: a running world, a seat's actual view, a 
 
 ## Launch
 
-`scripts/empire` needs `cargo`, `curl` and `jq`. It starts a headless server with a throwaway database and stores its PID and tokens in a private temporary state directory.
+`scripts/empire` needs `cargo`, `curl` and `jq`; `scripts/empire --help` lists its commands.
 
 ```sh
 scripts/empire start --scenario scenarios/rome.yaml --seed 2026
 ```
 
-The JSON response prints the state directory. Set `EMPIRE_STATE_DIR` on every command to choose a different path; within this checkout the default is stable, so it is usually unnecessary.
-
 ## Doctor
 
-Run this single read-only check before driving a world. It verifies the server process, an MCP initialize request and an authenticated admin overview request.
+Check the world before driving it:
 
 ```sh
 scripts/empire doctor
 ```
-
-Healthy output includes `"status":"healthy"`, `"mcp":"answered"` and `"admin":"authorized"`.
 
 ## Drive
 
@@ -42,7 +38,7 @@ The default world uses `scenarios/rome.yaml`; use another scenario when a featur
 
 ## Evidence
 
-Create a named directory outside the repository and world state, then save command output there. The user's `/tmp` is RAM-backed; evidence survives `stop` because cleanup only removes the state directory.
+Save command output in a named directory outside the repository; it survives `stop`, which removes only the state directory.
 
 ```sh
 evidence="${TMPDIR:-/tmp}/empire-evidence/appointments"
@@ -52,18 +48,14 @@ scripts/empire tick 1 | tee "$evidence/tick.json"
 scripts/empire tool senate look '{}' | tee "$evidence/appointee.json"
 ```
 
-In a PR, include the commands and output lines that prove each claim under `## Verified`.
-
 ## Cleanup
 
 ```sh
 scripts/empire stop
-test -d "$evidence" && echo 'evidence preserved'
-rg -n 'accepted|Commander' "$evidence" >> /tmp/empire-verified-lines.txt
 rm -rf "$evidence"
 ```
 
-`stop` terminates only the recorded CLI server and removes its state directory. If the process already stopped, it still removes stale state. Delete the evidence directory after its key lines are in the PR's `## Verified` section.
+Delete the evidence directory once its key lines are in the PR's `## Verified` section. Before reporting done, `ps -eo pid,args | grep '[d]ebug/sim-server'` shows no world you started.
 
 ## Steps
 
@@ -74,12 +66,12 @@ rm -rf "$evidence"
 ## By area
 
 **Engine, ruleset, perception (`sim-core`)**
-- `scripts/empire start`, `tick`, `chronicle` and `views` run a disposable world, close ticks through the admin API, and read every seat through MCP. Read the views of seats your change affects.
+- Read the views of the seats your change affects.
 - Run the leak proptest hard, after extending it for new foreign data (`CODE_RULES.md`, Seats): `PROPTEST_CASES=2000 cargo test -p sim-core --test replay`.
 - A rebalance shows in the golden snapshots (`cargo insta review`); explain every diff you accept.
 
 **MCP tools and admin API (`sim-server`)**
-- The e2e tests in `crates/sim-server/tests/e2e.rs` cover the contract. For behaviour, use `scripts/empire tool <seat> <name> <json>`; the CLI performs the MCP session handshake.
+- The e2e tests in `crates/sim-server/tests/e2e.rs` cover the contract. For behaviour, use `scripts/empire tool`.
 
 **Runner and sandbox (`sim-runner`)**
 - `cargo test -p sim-runner && cargo test -p sim-server --test runner`.
