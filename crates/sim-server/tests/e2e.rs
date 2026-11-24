@@ -386,3 +386,44 @@ async fn the_game_master_rules_on_a_secret_plan_over_mcp() {
         "private ruling by default"
     );
 }
+
+#[tokio::test]
+async fn a_head_of_state_appoints_over_mcp_and_the_appointee_gains_the_office() {
+    let s = Server::start().await;
+    let (crown, rival) = (s.mcp().await, s.mcp().await);
+    let (ct, rt) = (s.tok("crown"), s.tok("rival"));
+    let queen = look(&crown, &ct).await["perception"]["you_play"][0].clone();
+    let appoint = queen["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "appoint")
+        .unwrap();
+    assert_eq!(appoint["target"], "own_character");
+    assert_eq!(appoint["choice"]["options"]["commander"], "Commander");
+
+    let order = |choice: Value| json!({ "kind": "action", "character": "queen", "action": "appoint", "target": "duke", "choice": choice });
+    let acted = ok(call(
+        &crown,
+        "act",
+        json!({ "seat_token": ct, "tick": 0, "orders": [order(json!(null)), order(json!("commander"))] }),
+    )
+    .await);
+    assert!(
+        acted["results"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("needs a choice, one of: official, commander")
+    );
+    assert_eq!(acted["results"][1]["accepted"], true);
+    s.post("/tick", json!({})).await;
+
+    let duke = look(&rival, &rt).await["perception"].clone();
+    assert_eq!(duke["you_play"][0]["office"], "Commander");
+    assert_eq!(duke["you_play"][0]["actions"][0]["id"], "campaign");
+    assert!(
+        duke["recent"]
+            .to_string()
+            .contains("Duke Bors becomes Commander (formerly Official).")
+    );
+}

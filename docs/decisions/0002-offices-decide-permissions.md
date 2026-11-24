@@ -13,4 +13,4 @@ Permissions must come from the ruleset, which names no setting, while titles com
 ## Consequences
 
 - `Sight::of_seat` reads offices from the live state, so a seat's sight follows its character's office with no extra code.
-- No event moves an office yet. Appointments, succession and coups will add one.
+- `OfficeChanged` moves an office. The head of state's `appoint` emits it; succession and coups will too.

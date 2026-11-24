@@ -42,8 +42,9 @@ pub struct ActArgs {
     /// The `tick` from the perception you decided on. Rejected if the world has moved on.
     pub tick: Tick,
     /// Orders for your characters this tick. Each character may give a limited number
-    /// (see `orders_per_character`). Use `action` for listed actions and `freeform` for
-    /// anything else, which the game master rules on.
+    /// (see `orders_per_character`). Use `action` for listed actions, with a `target` when
+    /// the action names a target kind and a `choice` from its `choice.options` when it lists
+    /// them, and `freeform` for anything else, which the game master rules on.
     pub orders: Vec<Order>,
 }
 

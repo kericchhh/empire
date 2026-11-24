@@ -68,6 +68,9 @@ pub struct OfficeDef {
     /// Holders are known by name in every empire.
     #[serde(default)]
     pub public: bool,
+    /// A head of state may move characters into and out of it with an office choice.
+    #[serde(default)]
+    pub appointable: bool,
     /// Actions holders may take.
     #[serde(default)]
     pub actions: Vec<ActionId>,
@@ -97,6 +100,9 @@ pub struct ActionDef {
     pub description: String,
     #[serde(default)]
     pub target: TargetKind,
+    /// What the order's `choice` picks, for an action that needs one.
+    #[serde(default)]
+    pub choice: Option<ChoiceKind>,
     /// Resources the actor spends. The action is rejected if any would drop below zero.
     #[serde(default)]
     pub cost: BTreeMap<ResourceId, f64>,
@@ -116,6 +122,15 @@ pub enum TargetKind {
     Region,
     /// Any character the actor knows of.
     Character,
+    /// A character of the actor's own empire.
+    OwnCharacter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChoiceKind {
+    /// An office the ruleset lists, to move the target character into.
+    Office,
 }
 
 /// A change written in a ruleset, resolved to concrete targets at run time.
@@ -265,6 +280,16 @@ impl Ruleset {
     pub fn resource(&self, id: &ResourceId) -> Option<&StatDef<ResourceId>> {
         self.resources.iter().find(|m| &m.id == id)
     }
+    /// The values a choice of `kind` accepts, as `(id, name)` in ruleset order.
+    pub fn choices(&self, kind: ChoiceKind) -> impl Iterator<Item = (&str, &str)> {
+        match kind {
+            ChoiceKind::Office => self
+                .offices
+                .iter()
+                .filter(|o| o.appointable)
+                .map(|o| (o.id.as_str(), o.name.as_str())),
+        }
+    }
 
     pub fn validate(&self) -> Result<(), DefinitionError> {
         unique("metric", self.metrics.iter().map(|m| m.id.as_str()))?;
@@ -319,8 +344,15 @@ impl Ruleset {
                     )));
                 }
             }
+            if a.choice == Some(ChoiceKind::Office) && a.target != TargetKind::OwnCharacter {
+                return Err(invalid(format!(
+                    "{ctx}: an office choice needs target: own_character"
+                )));
+            }
+            let has_target_character =
+                matches!(a.target, TargetKind::Character | TargetKind::OwnCharacter);
             for e in &a.effects {
-                self.check_effect(&ctx, e, a.target == TargetKind::Character)?;
+                self.check_effect(&ctx, e, has_target_character)?;
                 if let Some(v) = &e.scale_by {
                     self.check_value(&ctx, v, RuleScope::EachRegion)?;
                 }
@@ -514,10 +546,11 @@ mod tests {
 
     #[test]
     fn inconsistent_or_non_finite_definitions_are_rejected() {
-        let bad: [fn(&mut Ruleset); 17] = [
+        let bad: [fn(&mut Ruleset); 18] = [
             // Default actions must be allowed and untargeted.
             |r| r.offices[0].default_action = Some("work".into()),
             |r| r.offices[0].default_action = Some("feast".into()),
+            |r| r.actions[0].choice = Some(ChoiceKind::Office),
             // Effects need a scope that provides their target.
             |r| r.actions[0].effects[0].target = EffectTarget::TargetResource("influence".into()),
             |r| r.rules[0].scope = RuleScope::EachEmpire,

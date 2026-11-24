@@ -238,6 +238,11 @@ impl State {
             EventKind::ActionResolved { effects, .. }
             | EventKind::RuleFired { effects, .. }
             | EventKind::Intervention { effects, .. } => self.apply_effects(effects),
+            EventKind::OfficeChanged { character, to, .. } => {
+                if let Some(c) = self.characters.get_mut(character) {
+                    c.office = to.clone();
+                }
+            }
             EventKind::ActionRejected { .. } | EventKind::MessageSent { .. } => {}
             EventKind::FreeformDeclared {
                 id,
