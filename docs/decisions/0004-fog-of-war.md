@@ -15,6 +15,6 @@ If hidden state leaks across seats or empires, the experiment is invalid. Both e
 ## Consequences
 
 - Every new event kind goes through both `Sight` and `describe`.
-- `no_seat_sees_anything_hidden_of_another_empire` (`crates/sim-core/tests/replay.rs`) shifts everything foreign and requires every seat's perception and chronicle to stay identical. New foreign-owned state or event fields extend its `shift_foreign`.
+- `no_seat_sees_anything_hidden_of_another_empire` (`crates/sim-core/tests/replay.rs`) shifts everything foreign, including the words of foreign events that reach none of the observer's characters or regions, and requires every seat's perception and chronicle to stay identical.
 - Free-form plans are private: the declaration and its expiry are visible to the author and the game master. A ruling is private to the author unless `public: true`.
 - Agent text is quoted in-world speech. `check_text` rejects line breaks, control characters, `«` and `»`, so agents cannot forge chronicle lines or break out of the quotes.

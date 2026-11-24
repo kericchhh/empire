@@ -24,7 +24,7 @@ Done when every class has been checked against every changed file, and every rep
 - **Nondeterminism:** iteration over unordered maps, randomness outside `roll`, wall-clock time or the environment in `sim-core`, floats that can turn non-finite, replay that would differ from the live state.
 - **Schema:** an event variant changed in meaning instead of added; a field added without `#[serde(default)]`; scenario types changed without regenerating `schema/`.
 - **Core model:** a change that breaks an `AGENTS.md` core-model rule without the user having agreed to it.
-- **Tests:** behaviour shipped without a test that fails when it breaks; new foreign-owned data or event fields missing from `shift_foreign` in `crates/sim-core/tests/replay.rs`.
+- **Tests:** behaviour shipped without a test that fails when it breaks; the leak test not extended for new foreign data (`CODE_RULES.md`, Seats).
 - **Tight:** code that could be smaller or simpler with the same behaviour: duplication, dead code, an abstraction with one user, a comment that restates the code.
 - **Drift:** `AGENTS.md` (State, Workspace), `README.md`, a decision record or the schema no longer matching the code.
 

@@ -18,5 +18,5 @@ Live tests before this showed that a run inside a repo saw its git status and co
 - Only standalone agent executables work: the native Claude Code install, not npm's, whose `cli.js` needs a `node` from outside `/usr`.
 - Agent executables and the bridge are copied, once per version, to `/var/tmp/empire-<uid>` (macOS: the per-user temp dir), so no mount names the user's home. Unused copies go after ten minutes.
 - A killed run takes its process tree with it on Linux (`--unshare-pid`, `--die-with-parent`). On macOS only the main process dies.
-- `clippy.toml` in `sim-runner` bans `Command::new` outside the sandbox module.
+- `clippy.toml` in `sim-runner` bans `Command::new` outside the sandbox module, except at sites marked with an `#[expect]` and a reason that are not agent runs (the user's own login, the bridge inside the sandbox).
 - The runner refuses the game-master seat for now: its run would start with the others, before there is anything to rule on. It can start once only the game master is left to end its turn, e.g. with `waiting_for` on `TurnView`.

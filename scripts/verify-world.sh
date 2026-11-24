@@ -17,9 +17,13 @@ target/debug/sim-server run --db "$dir/world.db" --scenario "$scenario" --seed "
 pid=$!
 trap 'kill $pid 2>/dev/null; rm -rf "$dir"' EXIT
 
-for _ in $(seq 100); do
+for i in $(seq 101); do
   grep -q '^Seat tokens:' "$dir/out" && curl -s -o /dev/null "$api/mcp" && break
-  kill -0 $pid 2>/dev/null || { cat "$dir/log" >&2; exit 1; }
+  if [ "$i" = 101 ] || ! kill -0 $pid 2>/dev/null; then
+    echo "the world did not start on $api" >&2
+    cat "$dir/log" >&2
+    exit 1
+  fi
   sleep 0.1
 done
 admin=$(sed -n 's/^Admin token (for \/api): //p' "$dir/out")
