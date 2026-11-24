@@ -9,7 +9,7 @@ The **replay invariant**: replaying the full event log from an empty world produ
 - `sim-core` is **pure**: its only inputs are state, events and a seed. File, network and environment access, wall-clock time and async all live in `sim-server`.
 - Take randomness only from the seeded ChaCha RNG. Derive a separate stream per `(seed, tick, purpose)` so that adding a new consumer leaves the existing streams unchanged.
 - Iterate in a stable order: `BTreeMap`, `BTreeSet` or a sorted `Vec`.
-- `crates/sim-core/clippy.toml` enforces purity: it bans `HashMap`, `HashSet`, wall-clock time, the environment, file access and unseeded `rand`.
+- `crates/sim-core/clippy.toml` enforces purity: it bans `HashMap`, `HashSet`, wall-clock time, the environment, files, the network and unseeded `rand`.
 - Use rayon only for updates where each element is independent. Do reductions (sums, totals) sequentially, in a fixed order.
 
 ## Events

@@ -20,3 +20,4 @@ Codex documents that a user cannot switch every command feature off, so tool swi
 - Tool calls go through code mode, so `codex-code-mode-host` is staged beside `codex` (`Spec::helpers`); its JavaScript reaches only the given tools.
 - Codex reports a refused login only as text ("sign in again"), which `codex::summary` matches.
 - Two runs refreshing at once can still race, since OpenAI rotates refresh tokens.
+- Local models have been tested against a stub server, not yet a real model.

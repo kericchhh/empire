@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
+
 use proptest::prelude::*;
 use sim_core::engine::{self, close_tick};
 use sim_core::perceive::{Sight, can_see, describe};
 use sim_core::ruleset::TargetKind;
 use sim_core::{
-    Effect, EmpireId, Event, EventKind, Order, Ruling, Scenario, SeatId, State, Submission, Target,
-    TurnInput, World, perceive,
+    CharacterId, Effect, EmpireId, Event, EventKind, OfficeId, Order, RegionId, Ruling, Scenario,
+    SeatId, State, Submission, Target, TurnInput, Visibility, World, perceive,
 };
 
 const ROME: &str = include_str!("../../../scenarios/rome.yaml");
@@ -175,22 +177,95 @@ fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
     }
 }
 
-/// Changes everything of other empires that `ours` must not see: their numbers, their notes,
-/// and every logged delta whose target or scale belongs to them.
-fn shift_foreign(state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
+/// Changes everything of other empires that `ours` must not see: their numbers, notes and
+/// plans, where their characters stand and which private offices they hold, every logged
+/// delta whose target or scale is theirs, and the words of every event they caused that
+/// reaches none of ours.
+fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
     let foreign = |t: &Target| owner(state, t).is_some_and(|e| e != ours);
+    let theirs = |c: &CharacterId| state.characters.get(c).is_some_and(|c| &c.empire != ours);
+    let reaches_us = |t: &Option<String>| {
+        t.as_deref().is_some_and(|t| {
+            let (c, r) = (CharacterId::from(t), RegionId::from(t));
+            state.characters.get(&c).is_some_and(|c| &c.empire == ours)
+                || state.regions.get(&r).is_some_and(|r| &r.owner == ours)
+        })
+    };
+    let bump = |effects: &mut Vec<Effect>| {
+        effects
+            .iter_mut()
+            .filter(|f| foreign(&f.target) || f.scaled_by.as_ref().is_some_and(foreign))
+            .for_each(|f| f.delta += 1.0)
+    };
+    let secret = " in secret";
+    let plans: BTreeMap<String, CharacterId> = log
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FreeformDeclared { id, character, .. } => {
+                Some((id.clone(), character.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let their_plan = |id: &String| plans.get(id).is_some_and(theirs);
     let shift = |mut e: Event| {
-        if let EventKind::ActionResolved { effects, .. }
-        | EventKind::FreeformRuled { effects, .. }
-        | EventKind::RuleFired { effects, .. }
-        | EventKind::Intervention { effects, .. } = &mut e.kind
-        {
-            effects
-                .iter_mut()
-                .filter(|f| foreign(&f.target) || f.scaled_by.as_ref().is_some_and(foreign))
-                .for_each(|f| f.delta += 1.0);
+        let to_them = matches!(&e.visibility, Visibility::Empire(v) if v != ours);
+        match &mut e.kind {
+            EventKind::ActionResolved {
+                character,
+                action,
+                target,
+                effects,
+            } => {
+                if theirs(character) && !reaches_us(target) {
+                    *action = "hidden".into();
+                }
+                bump(effects);
+            }
+            EventKind::RuleFired {
+                empire,
+                label,
+                effects,
+                ..
+            } => {
+                if let Some(l) = label.as_mut().filter(|_| empire != ours) {
+                    l.push_str(secret);
+                }
+                bump(effects);
+            }
+            EventKind::Intervention { title, effects, .. } => {
+                if to_them {
+                    title.push_str(secret);
+                }
+                bump(effects);
+            }
+            EventKind::FreeformRuled {
+                id,
+                outcome,
+                effects,
+            } => {
+                if their_plan(id) {
+                    outcome.push_str(secret);
+                }
+                bump(effects);
+            }
+            EventKind::FreeformExpired { id } if their_plan(id) => id.push_str(secret),
+            EventKind::ActionRejected {
+                character, reason, ..
+            } if theirs(character) => reason.push_str(secret),
+            EventKind::FreeformDeclared {
+                character, text, ..
+            } if theirs(character) => text.push_str(secret),
+            EventKind::MessageSent { from, to, text } if theirs(from) && theirs(to) => {
+                text.push_str(secret)
+            }
+            _ => {}
         }
         e
+    };
+    let next = |all: &[&RegionId], r: &RegionId| {
+        let i = all.iter().position(|x| *x == r)?;
+        Some(all[(i + 1) % all.len()].clone())
     };
     let mut s = state.clone();
     for (id, es) in &mut s.empires {
@@ -201,9 +276,26 @@ fn shift_foreign(state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<E
     for rs in s.regions.values_mut().filter(|r| &r.owner != ours) {
         rs.stats.values_mut().for_each(|v| *v += 1.0);
     }
+    let offices: Vec<&OfficeId> = w
+        .rules
+        .offices
+        .iter()
+        .filter(|o| !o.public)
+        .map(|o| &o.id)
+        .collect();
     for cs in s.characters.values_mut().filter(|c| &c.empire != ours) {
         cs.resources.values_mut().for_each(|v| *v += 1.0);
         cs.notes.push("A hidden thought".into());
+        let homes: Vec<&RegionId> = state.regions_of(&cs.empire).collect();
+        if let Some(r) = next(&homes, &cs.region) {
+            cs.region = r;
+        }
+        if let Some(i) = offices.iter().position(|o| *o == &cs.office) {
+            cs.office = offices[(i + 1) % offices.len()].clone();
+        }
+    }
+    for p in s.pending.values_mut().filter(|p| theirs(&p.character)) {
+        p.text.push_str(secret);
     }
     s.recent = s.recent.into_iter().map(shift).collect();
     (s, log.iter().cloned().map(shift).collect())
@@ -249,7 +341,7 @@ proptest! {
         let w = rome();
         let (state, log) = run(&w, seed, &ticks);
         for (empire, seat) in w.scenario.seats() {
-            let (other, other_log) = shift_foreign(&state, &log, &empire.id);
+            let (other, other_log) = shift_foreign(&w, &state, &log, &empire.id);
             prop_assert_eq!(perceive(&w, &other, &seat.id), perceive(&w, &state, &seat.id));
             prop_assert_eq!(
                 chronicle(&w, &other, &other_log, &seat.id),
