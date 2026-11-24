@@ -1,0 +1,4 @@
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "start agent processes only through turn::sandbox" },
+  { path = "tokio::process::Command::new", reason = "start agent processes only through turn::sandbox" },
+]

@@ -231,6 +231,10 @@ fn bridge(args: Vec<OsString>) -> io::Result<i32> {
         }
         crate::fs::private_file(file, false)?.write_all(&given)?;
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the bridge already runs inside the sandbox"
+    )]
     let status = std::process::Command::new(program).args(rest).status()?;
     if let Some((file, sock)) = &carried
         && let Some(back) = crate::fs::read_carried(file)

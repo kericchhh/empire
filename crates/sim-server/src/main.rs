@@ -1,3 +1,9 @@
+#![expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "a binary reports errors with anyhow"
+)]
+
 use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

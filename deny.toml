@@ -52,6 +52,8 @@ deny = [
   { crate = "gemini-rust" },
   { crate = "aws-sdk-bedrockruntime" },
   { crate = "aws-sdk-bedrockagentruntime" },
+  # Library crates return thiserror enums; only binaries and Tauri itself use anyhow.
+  { crate = "anyhow", wrappers = ["sim-server", "tauri", "tauri-build", "tauri-utils"] },
 ]
 
 [sources]

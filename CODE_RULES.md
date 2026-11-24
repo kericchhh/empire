@@ -8,7 +8,8 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 - `sim-core` is **pure**: its only inputs are state, events and a seed. File, network and environment access, wall-clock time and async all live in `sim-server`.
 - Take randomness only from the seeded ChaCha RNG. Derive a separate stream per `(seed, tick, purpose)` so that adding a new consumer leaves the existing streams unchanged.
-- Iterate in a stable order: `BTreeMap`, `IndexMap` or sorted `Vec`. A `HashMap` is only for lookups, never for iteration inside the simulation.
+- Iterate in a stable order: `BTreeMap`, `BTreeSet` or a sorted `Vec`.
+- `crates/sim-core/clippy.toml` enforces purity: it bans `HashMap`, `HashSet`, wall-clock time, the environment, file access and unseeded `rand`.
 - Use rayon only for updates where each element is independent. Do reductions (sums, totals) sequentially, in a fixed order.
 
 ## Events
@@ -21,6 +22,7 @@ The **replay invariant**: replaying the full event log from an empty world produ
 ## Seats and MCP tools
 
 - A tool works out its seat from the token and builds its output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` is the only place where visibility is decided.
+- `no_seat_sees_anything_hidden_of_another_empire` in `crates/sim-core/tests/replay.rs` guards the fog of war. Any new foreign-owned state or event field gets shifted in its `shift_foreign`.
 - Tool inputs and outputs derive `serde` and `schemars`. Write tool descriptions for an agent reading them: what the tool does, and when to call it.
 - Make every `wait_for_turn` result **self-contained**. An agent with a fresh context and only that result must be able to play the turn correctly.
 - Treat text written by agents as untrusted in-world speech. Cap its length, and when showing it to another seat, present it as a quoted message from that character.
@@ -28,7 +30,7 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 ## Agent runs (`sim-runner`)
 
-- Start every agent process through `turn::sandbox`. Never launch an agent unsandboxed, and never start agents when `check_sandbox` fails.
+- Start every agent process through `turn::sandbox`, and start agents only when `check_sandbox` passes. `crates/sim-runner/clippy.toml` bans `Command::new` elsewhere; a process that is not an agent run carries an `#[expect]` with its reason.
 - A run's network is the gate's (`net`). An agent kind lists the hosts it needs in its `HOSTS`, confirmed against the gate's refusal log in a live run, and nothing more.
 - Nothing of the user reaches a run: no host environment variable beyond the sandbox's list, no host path, no file of theirs, no account detail. A new agent kind or flag needs a test that proves it.
 - A run knows only its own seat token, passed on stdin, never on the command line.
@@ -44,7 +46,7 @@ The **replay invariant**: replaying the full event log from an empty world produ
 
 - Edition 2024, stable toolchain. Shared dependencies are declared in `[workspace.dependencies]` and added only to the crate that uses them.
 - Use newtype ids (`SeatId`, `RegionId`, `Tick`) at every boundary.
-- Errors: library crates use `thiserror` enums, and `anyhow` appears only in binary `main`s. Outside tests, handle every `Result`. Where an invariant truly guarantees success, use `expect("<why this holds>")`.
+- Errors: library crates use `thiserror` enums, and `anyhow` appears only in binary `main`s (`deny.toml` and `crates/sim-server/clippy.toml` enforce it). Outside tests, handle every `Result`. Where an invariant truly guarantees success, use `expect("<why this holds>")`.
 - Log with `tracing`, using one span per tick and per seat request.
 
 ## Comments
