@@ -6,7 +6,7 @@ Use an ordinary seat in a started world. Available actions and limits are includ
 
 ## Driving it
 
-Call `scripts/empire tool princeps look '{}'`, then submit an action and an invalid action with `scripts/empire tool princeps act '<JSON object>'`. Use the `tick` returned by perception and the exact action, target and choice values it lists. Inspect the append-only log with `GET /api/events?after=0&limit=500`; its admin token is stored privately at `$EMPIRE_STATE_DIR/admin` (default `/tmp/empire-control-$UID/admin`).
+Call `scripts/empire tool princeps look '{}'`, then submit an action and an invalid action with `scripts/empire tool princeps act '<JSON object>'`. Use the `tick` returned by perception and the exact action, target and choice values it lists. Inspect the append-only log with `scripts/empire api GET '/api/events?after=0&limit=500'`.
 
 ## Proof
 
