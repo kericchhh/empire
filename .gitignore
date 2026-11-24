@@ -11,6 +11,9 @@ target/
 *.snap.new
 *.pending-snap
 
+# proptest seeds from mutation checks; a real failure becomes a unit test
+*.proptest-regressions
+
 # Frontend (app/ UI)
 node_modules/
 dist/
