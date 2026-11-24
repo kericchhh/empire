@@ -550,6 +550,7 @@ mod tests {
             character: c.into(),
             action: a.into(),
             target: target.map(str::to_owned),
+            choice: None,
         }
     }
 

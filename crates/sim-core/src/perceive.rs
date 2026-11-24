@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::{Effect, Event, EventKind, Target, Visibility};
 use crate::ids::*;
-use crate::ruleset::{RegionSight, StatDef, TargetKind, ValueRef};
+use crate::ruleset::{ChoiceKind, RegionSight, StatDef, TargetKind, ValueRef};
 use crate::state::State;
 use crate::world::World;
 
@@ -73,6 +73,16 @@ pub struct ActionView {
     pub description: String,
     pub target: TargetKind,
     pub cost: BTreeMap<ResourceId, f64>,
+    /// Set when the order must also carry a `choice`: one of `options`, by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<ChoiceView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ChoiceView {
+    pub kind: ChoiceKind,
+    /// Each valid `choice` id, with its name.
+    pub options: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -171,6 +181,13 @@ pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
                         description: a.description.clone(),
                         target: a.target,
                         cost: a.cost.clone(),
+                        choice: a.choice.map(|kind| ChoiceView {
+                            kind,
+                            options: rules
+                                .choices(kind)
+                                .map(|(id, name)| (id.to_owned(), name.to_owned()))
+                                .collect(),
+                        }),
                     })
                     .collect(),
             }
@@ -491,7 +508,9 @@ pub fn describe(w: &World, e: &Event, sight: &Sight) -> Option<String> {
                             }
                             w.region(&region)?.name.clone()
                         }
-                        TargetKind::Character => name_of(w, &CharacterId::from(t.as_str())),
+                        TargetKind::Character | TargetKind::OwnCharacter => {
+                            name_of(w, &CharacterId::from(t.as_str()))
+                        }
                         TargetKind::None => return None,
                     };
                     Some(format!(" on {name}"))
@@ -501,6 +520,19 @@ pub fn describe(w: &World, e: &Event, sight: &Sight) -> Option<String> {
                 "{}: {aname}{on}{}",
                 name_of(w, character),
                 effects_text(w, sight, effects)
+            )
+        }
+        EventKind::OfficeChanged {
+            character,
+            from,
+            to,
+        } => {
+            let office = |o: &OfficeId| label(w.rules.office(o).map(|d| &d.name), o);
+            format!(
+                "{} becomes {} (formerly {}).",
+                name_of(w, character),
+                office(to),
+                office(from)
             )
         }
         EventKind::ActionRejected {
@@ -591,7 +623,15 @@ mod tests {
         );
         assert_eq!(queen.office, "Head of state");
         let actions: Vec<_> = queen.actions.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(actions, ["decree", "feast", "spy"]);
+        assert_eq!(actions, ["decree", "feast", "spy", "appoint"]);
+        let choice = queen.actions[3]
+            .choice
+            .as_ref()
+            .expect("appoint needs a choice");
+        assert_eq!(choice.kind, ChoiceKind::Office);
+        assert_eq!(choice.options["official"], "Official");
+        assert_eq!(choice.options.len(), 2);
+        assert_eq!(queen.actions[0].choice, None);
         assert_eq!(v.world.date, "Spring, 1");
         assert_eq!(v.empires[0].culture["religion"], "The Old Gods");
     }

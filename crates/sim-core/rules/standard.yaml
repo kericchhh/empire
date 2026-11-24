@@ -30,22 +30,26 @@ offices:
     name: Head of state
     description: Rules the empire. Commands its treasury, its provinces and the loyalty of its armies.
     public: true
-    actions: [relief, raise_taxes, issue_edict, public_works]
+    actions: [relief, raise_taxes, issue_edict, public_works, appoint]
   - id: official
+    appointable: true
     name: Official
     description: Sits in the councils of state. Lives by influence, favours and intrigue.
     actions: [support_ruler, oppose_ruler, bribe, conspire, attend_council]
     default_action: attend_council
   - id: commander
+    appointable: true
     name: Commander
     description: Leads the armies. Wins wars, holds frontiers, and could turn them on the capital.
     actions: [campaign, garrison, train_army]
   - id: governor
+    appointable: true
     name: Governor
     description: Administers a home province for the head of state.
     actions: [administer, levy]
     default_action: administer
   - id: private
+    appointable: true
     name: Private person
     description: Holds no office. Acts through talent, words, wealth and the people they know.
     actions: [create_work, denounce, bribe]
@@ -90,6 +94,12 @@ actions:
       - { target: { stat: wealth }, delta: 0.05 }
       - { target: { metric: culture }, delta: 0.02 }
       - { target: { resource: influence }, delta: 1 }
+  - id: appoint
+    name: Appoint to office
+    description: Move one of your empire's people into an office. They lose the one they held.
+    target: own_character
+    choice: office
+    cost: { influence: 1 }
   - id: support_ruler
     name: Support the ruler
     description: Speak for the head of state in council.

@@ -16,6 +16,7 @@ const ROME: &str = include_str!("../../../scenarios/rome.yaml");
 #[derive(Debug, Clone)]
 enum Step {
     Order(usize),
+    Appoint(usize),
     Freeform(usize),
     Message(usize, usize),
     Note(usize),
@@ -26,6 +27,7 @@ enum Step {
 fn step() -> impl Strategy<Value = Step> {
     prop_oneof![
         4 => any::<usize>().prop_map(Step::Order),
+        1 => any::<usize>().prop_map(Step::Appoint),
         1 => any::<usize>().prop_map(Step::Freeform),
         1 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Step::Message(a, b)),
         1 => any::<usize>().prop_map(Step::Note),
@@ -38,40 +40,58 @@ fn history() -> impl Strategy<Value = Vec<Vec<Step>>> {
     prop::collection::vec(prop::collection::vec(step(), 0..8), 1..30)
 }
 
-fn all_orders(w: &World) -> Vec<TurnInput> {
+/// Every order the live offices allow, split into those without a choice and those with
+/// one. Foreign targets and invalid choices too, so rejections are part of the history.
+fn all_orders(w: &World, state: &State) -> (Vec<TurnInput>, Vec<TurnInput>) {
     let sc = &w.scenario;
-    let mut out = Vec::new();
+    let (mut plain, mut chosen) = (Vec::new(), Vec::new());
     for (_, seat) in sc.seats() {
         for c in &seat.controls {
-            let office = w.rules.office(&w.character(c).unwrap().office).unwrap();
+            let office = w.rules.office(&state.characters[c].office).unwrap();
             for a in &office.actions {
-                let targets: Vec<Option<String>> = match w.rules.action(a).unwrap().target {
+                let adef = w.rules.action(a).unwrap();
+                let targets: Vec<Option<String>> = match adef.target {
                     TargetKind::None => vec![None],
-                    // Foreign regions too, so rejections are part of the history.
                     TargetKind::Region => sc.regions().map(|(_, r)| Some(r.id.0.clone())).collect(),
-                    TargetKind::Character => {
+                    TargetKind::Character | TargetKind::OwnCharacter => {
                         sc.characters().map(|(_, x)| Some(x.id.0.clone())).collect()
                     }
                 };
-                for target in targets {
-                    out.push(TurnInput {
-                        seat: seat.id.clone(),
-                        submission: Submission::Order(Order::Action {
-                            character: c.clone(),
-                            action: a.clone(),
-                            target,
-                        }),
-                    });
+                let choices: Vec<Option<String>> = match adef.choice {
+                    None => vec![None],
+                    Some(kind) => w
+                        .rules
+                        .choices(kind)
+                        .map(|(id, _)| Some(id.to_owned()))
+                        .chain([Some("emperor".into()), None])
+                        .collect(),
+                };
+                let out = if adef.choice.is_some() {
+                    &mut chosen
+                } else {
+                    &mut plain
+                };
+                for target in &targets {
+                    for choice in &choices {
+                        out.push(TurnInput {
+                            seat: seat.id.clone(),
+                            submission: Submission::Order(Order::Action {
+                                character: c.clone(),
+                                action: a.clone(),
+                                target: target.clone(),
+                                choice: choice.clone(),
+                            }),
+                        });
+                    }
                 }
             }
         }
     }
-    out
+    (plain, chosen)
 }
 
 fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
     let sc = &w.scenario;
-    let orders = all_orders(w);
     let players: Vec<(SeatId, sim_core::CharacterId)> = sc
         .seats()
         .flat_map(|(_, s)| s.controls.iter().map(|c| (s.id.clone(), c.clone())))
@@ -100,9 +120,14 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
     };
     for steps in ticks {
         let mut inputs = Vec::new();
+        let (orders, appointments) = all_orders(w, &state);
         for s in steps {
             match *s {
                 Step::Order(i) => inputs.push(orders[i % orders.len()].clone()),
+                Step::Appoint(i) if !appointments.is_empty() => {
+                    inputs.push(appointments[i % appointments.len()].clone());
+                }
+                Step::Appoint(_) => {}
                 Step::Freeform(i) => {
                     let (seat, c) = &players[i % players.len()];
                     inputs.push(TurnInput {
@@ -178,9 +203,9 @@ fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
 }
 
 /// Changes everything of other empires that `ours` must not see: their numbers, notes and
-/// plans, where their characters stand and which private offices they hold, every logged
-/// delta whose target or scale is theirs, and the words of every event they caused that
-/// reaches none of ours.
+/// plans, where their characters stand, which private offices they hold and which offices
+/// they move between, every logged delta whose target or scale is theirs, and the words of
+/// every event they caused that reaches none of ours.
 fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
     let foreign = |t: &Target| owner(state, t).is_some_and(|e| e != ours);
     let theirs = |c: &CharacterId| state.characters.get(c).is_some_and(|c| &c.empire != ours);
@@ -250,6 +275,14 @@ fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (S
                 bump(effects);
             }
             EventKind::FreeformExpired { id } if their_plan(id) => id.push_str(secret),
+            EventKind::OfficeChanged {
+                character,
+                from,
+                to,
+            } if theirs(character) => {
+                *from = "hidden".into();
+                *to = "hidden".into();
+            }
             EventKind::ActionRejected {
                 character, reason, ..
             } if theirs(character) => reason.push_str(secret),

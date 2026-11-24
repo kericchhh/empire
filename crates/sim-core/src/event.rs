@@ -109,6 +109,11 @@ pub enum EventKind {
         target: Option<String>,
         effects: Vec<Effect>,
     },
+    OfficeChanged {
+        character: CharacterId,
+        from: OfficeId,
+        to: OfficeId,
+    },
     ActionRejected {
         character: CharacterId,
         action: ActionId,

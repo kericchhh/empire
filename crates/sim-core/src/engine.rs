@@ -9,7 +9,7 @@ use crate::event::{Cause, Effect, Event, EventKind, StartingValue, Target, Visib
 use crate::ids::*;
 use crate::perceive::knows;
 use crate::ruleset::{
-    ActionDef, EffectDef, EffectTarget, RuleScope, StatDef, TargetKind, ValueRef,
+    ActionDef, ChoiceKind, EffectDef, EffectTarget, RuleScope, StatDef, TargetKind, ValueRef,
 };
 use crate::state::State;
 use crate::world::{SeatRef, World};
@@ -24,6 +24,10 @@ pub enum Order {
         /// Region id or character id, when the action needs a target.
         #[serde(default)]
         target: Option<String>,
+        /// One of the action's `choice` options, when it lists them: e.g. the office to
+        /// appoint the target to.
+        #[serde(default)]
+        choice: Option<String>,
     },
     /// Anything not covered by a listed action. The game master rules on it next tick.
     Freeform {
@@ -82,6 +86,21 @@ pub enum Rejection {
     UnexpectedTarget { action: ActionId, target: String },
     #[error("`{0}` is not a valid target")]
     BadTarget(String),
+    #[error("action `{action}` needs a choice, one of: {options}")]
+    MissingChoice { action: ActionId, options: String },
+    #[error("action `{action}` takes no choice, got `{choice}`")]
+    UnexpectedChoice { action: ActionId, choice: String },
+    #[error("`{choice}` is not a valid choice for `{action}`, choose one of: {options}")]
+    BadChoice {
+        action: ActionId,
+        choice: String,
+        options: String,
+    },
+    #[error("`{character}` already holds the office `{office}`")]
+    AlreadyHolds {
+        character: CharacterId,
+        office: OfficeId,
+    },
     #[error("action `{0}` affects a region but none is in scope")]
     NoRegion(ActionId),
     #[error("not enough {resource}: need {need}, have {have}")]
@@ -281,7 +300,16 @@ pub fn check_order(
             character,
             action,
             target,
-        } => resolve_action(w, state, character, action, target.as_deref()).map(|_| ()),
+            choice,
+        } => resolve_action(
+            w,
+            state,
+            character,
+            action,
+            target.as_deref(),
+            choice.as_deref(),
+        )
+        .map(|_| ()),
     }
 }
 
@@ -445,14 +473,16 @@ fn resolve_effects(state: &State, scope: &Scope, defs: &[EffectDef]) -> Option<V
     Some(out)
 }
 
-/// Effects of an action, including its cost as negative resource effects.
+/// Effects of an action, including its cost as negative resource effects, and the event its
+/// choice causes, if any.
 fn resolve_action<'a>(
     w: &'a World,
     state: &State,
     character: &CharacterId,
     action: &ActionId,
     target: Option<&str>,
-) -> Result<(&'a ActionDef, Vec<Effect>), Rejection> {
+    choice: Option<&str>,
+) -> Result<(&'a ActionDef, Vec<Effect>, Option<EventKind>), Rejection> {
     let cs = state
         .characters
         .get(character)
@@ -491,19 +521,77 @@ fn resolve_action<'a>(
             }
             region = Some(&target_region);
         }
-        (TargetKind::Character, Some(t)) => {
+        (TargetKind::Character | TargetKind::OwnCharacter, Some(t)) => {
             target_char_id = CharacterId::from(t);
             // Characters of one seat share a player, so acting on each other would only move
             // resources between pockets of the same agent.
             let same_seat = w
                 .seat_of(character)
                 .is_some_and(|s| s.controls.contains(&target_char_id));
-            if same_seat || !knows(w, state, Some(&cs.empire), &target_char_id) {
+            let reachable = match adef.target {
+                TargetKind::OwnCharacter => state
+                    .characters
+                    .get(&target_char_id)
+                    .is_some_and(|c| c.empire == cs.empire),
+                _ => knows(w, state, Some(&cs.empire), &target_char_id),
+            };
+            if same_seat || !reachable {
                 return Err(Rejection::BadTarget(t.to_owned()));
             }
             target_character = Some(&target_char_id);
         }
     }
+
+    let then = match (adef.choice, choice) {
+        (None, None) => None,
+        (None, Some(c)) => {
+            return Err(Rejection::UnexpectedChoice {
+                action: action.clone(),
+                choice: c.to_owned(),
+            });
+        }
+        (Some(kind), c) => {
+            let ids: Vec<&str> = w.rules.choices(kind).map(|(id, _)| id).collect();
+            let options = || ids.join(", ");
+            let c = match c {
+                Some(c) if ids.contains(&c) => c,
+                Some(c) => {
+                    return Err(Rejection::BadChoice {
+                        action: action.clone(),
+                        choice: c.to_owned(),
+                        options: options(),
+                    });
+                }
+                None => {
+                    return Err(Rejection::MissingChoice {
+                        action: action.clone(),
+                        options: options(),
+                    });
+                }
+            };
+            match kind {
+                ChoiceKind::Office => {
+                    let character = target_character
+                        .expect("the ruleset gives every office choice a character target");
+                    let (from, to) = (&state.characters[character].office, OfficeId::from(c));
+                    if !w.rules.office(from).is_some_and(|o| o.appointable) {
+                        return Err(Rejection::BadTarget(character.to_string()));
+                    }
+                    if *from == to {
+                        return Err(Rejection::AlreadyHolds {
+                            character: character.clone(),
+                            office: to,
+                        });
+                    }
+                    Some(EventKind::OfficeChanged {
+                        character: character.clone(),
+                        from: from.clone(),
+                        to,
+                    })
+                }
+            }
+        }
+    };
 
     let scope = Scope {
         empire: &cs.empire,
@@ -529,7 +617,7 @@ fn resolve_action<'a>(
             scaled_by: None,
         });
     }
-    Ok((adef, effects))
+    Ok((adef, effects, then))
 }
 
 /// Resolve every submission of the current tick, run the rules, and advance to the next tick.
@@ -569,6 +657,7 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
 
     let mut orders_used: BTreeMap<&CharacterId, usize> = BTreeMap::new();
     let mut acted: BTreeSet<&CharacterId> = BTreeSet::new();
+    let mut moves = Vec::new();
     for input in &inputs {
         let Submission::Order(order) = &input.submission else {
             continue;
@@ -583,19 +672,30 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
         }
         *used += 1;
         let seat_only = Visibility::Seats(vec![input.seat.clone()]);
+        let empire = Visibility::Empire(log.state.characters[character].empire.clone());
+        let mut then = None;
         let (visibility, kind) = match order {
-            Order::Action { action, target, .. } => {
+            Order::Action {
+                action,
+                target,
+                choice,
+                ..
+            } => {
                 acted.insert(character);
-                match resolve_action(w, &log.state, character, action, target.as_deref()) {
-                    Ok((adef, effects)) => (
-                        action_visibility(w, &log.state, character, adef, target.as_deref()),
-                        EventKind::ActionResolved {
-                            character: character.clone(),
-                            action: action.clone(),
-                            target: target.clone(),
-                            effects,
-                        },
-                    ),
+                let (t, c) = (target.as_deref(), choice.as_deref());
+                match resolve_action(w, &log.state, character, action, t, c) {
+                    Ok((adef, effects, follow)) => {
+                        then = follow;
+                        (
+                            action_visibility(w, &log.state, character, adef, t),
+                            EventKind::ActionResolved {
+                                character: character.clone(),
+                                action: action.clone(),
+                                target: target.clone(),
+                                effects,
+                            },
+                        )
+                    }
                     Err(e) => (
                         seat_only,
                         EventKind::ActionRejected {
@@ -619,6 +719,9 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
             }
         };
         log.push(by_seat(tick, &input.seat, visibility, kind));
+        if let Some(kind) = then {
+            moves.push(by_seat(tick, &input.seat, empire, kind));
+        }
     }
 
     let idle: Vec<(CharacterId, ActionId)> = state
@@ -631,7 +734,7 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
         })
         .collect();
     for (c, action) in idle {
-        if let Ok((adef, effects)) = resolve_action(w, &log.state, &c, &action, None) {
+        if let Ok((adef, effects, _)) = resolve_action(w, &log.state, &c, &action, None, None) {
             log.push(Event {
                 tick,
                 cause: w
@@ -646,6 +749,22 @@ pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> 
                 },
             });
         }
+    }
+
+    // Offices move last, so every order this tick resolves under the office it was accepted for.
+    for mut e in moves {
+        if let EventKind::OfficeChanged {
+            character,
+            from,
+            to,
+        } = &mut e.kind
+        {
+            from.clone_from(&log.state.characters[character].office);
+            if from == to {
+                continue;
+            }
+        }
+        log.push(e);
     }
 
     let stale: Vec<(String, CharacterId)> = log
@@ -812,10 +931,22 @@ mod tests {
     }
 
     fn check(s: &Sim, seat: &str, c: &str, a: &str, t: Option<&str>) -> Result<(), Rejection> {
+        check_choice(s, seat, c, a, t, None)
+    }
+
+    fn check_choice(
+        s: &Sim,
+        seat: &str,
+        c: &str,
+        a: &str,
+        t: Option<&str>,
+        choice: Option<&str>,
+    ) -> Result<(), Rejection> {
         let order = Order::Action {
             character: c.into(),
             action: a.into(),
             target: t.map(str::to_owned),
+            choice: choice.map(str::to_owned),
         };
         check_order(&s.w, &s.state, &seat.into(), &order)
     }
@@ -999,6 +1130,133 @@ mod tests {
             check(&s, "rival", "duke", "plot", None),
             Err(Rejection::Insufficient { .. })
         ));
+    }
+
+    #[test]
+    fn appointing_moves_the_office_with_its_actions_and_sight() {
+        let mut s = Sim::tiny();
+        let duke = |s: &Sim| perceive(&s.w, &s.state, &"rival".into()).unwrap();
+        let sees_treasury = |p: &crate::perceive::Perception| {
+            p.empires[0].metrics.iter().any(|m| m.id == "treasury")
+        };
+        assert!(!sees_treasury(&duke(&s)));
+
+        let events = s.close(&[appoint("crown", "queen", "duke", "steward")]);
+        assert!(any_kind(&events, |k| *k
+            == EventKind::OfficeChanged {
+                character: "duke".into(),
+                from: "official".into(),
+                to: "steward".into(),
+            }));
+        assert_eq!(
+            s.state.characters[&"duke".into()].office.as_str(),
+            "steward"
+        );
+        let view = duke(&s);
+        let actions: Vec<_> = view.you_play[0]
+            .actions
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(actions, ["feast"]);
+        assert!(sees_treasury(&view), "the office brings its sight");
+        assert!(sees(
+            &s,
+            "rival",
+            "Duke Bors becomes Steward (formerly Official)."
+        ));
+        assert!(!sees(&s, "pirates", "Duke Bors becomes"));
+        assert!(check(&s, "rival", "duke", "feast", Some("south")).is_ok());
+    }
+
+    #[test]
+    fn an_appointment_takes_effect_after_every_order_of_its_tick() {
+        let mut s = Sim::tiny();
+        s.set_resource("duke", "influence", 1.0);
+        let events = s.close(&[
+            appoint("crown", "queen", "duke", "steward"),
+            appoint("crown", "queen", "duke", "steward"),
+            act("rival", "duke", "plot", None),
+        ]);
+        let moves = events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::OfficeChanged { .. }));
+        assert_eq!(moves.count(), 1, "a repeated appointment moves no office");
+        assert!(any_kind(&events, |k| matches!(
+            k,
+            EventKind::ActionResolved { character, action, .. }
+                if character.as_str() == "duke" && action.as_str() == "plot"
+        )));
+        assert_eq!(
+            s.state.characters[&"duke".into()].office.as_str(),
+            "steward"
+        );
+    }
+
+    #[test]
+    fn bad_appointments_are_rejected_with_a_reason() {
+        let mut s = Sim::tiny();
+        let try_appoint = |t, c| check_choice(&s, "crown", "queen", "appoint", Some(t), c);
+        let options = "official, steward".to_owned();
+        assert_eq!(
+            try_appoint("pirate_king", Some("official")),
+            Err(Rejection::BadTarget("pirate_king".into())),
+            "a foreign character"
+        );
+        assert_eq!(
+            try_appoint("duke", Some("emperor")),
+            Err(Rejection::BadChoice {
+                action: "appoint".into(),
+                choice: "emperor".into(),
+                options: options.clone(),
+            })
+        );
+        assert_eq!(
+            try_appoint("duke", Some("head_of_state")),
+            Err(Rejection::BadChoice {
+                action: "appoint".into(),
+                choice: "head_of_state".into(),
+                options: options.clone(),
+            }),
+            "an office the ruleset keeps out of appointments"
+        );
+        assert_eq!(
+            try_appoint("northfolk", Some("official")),
+            Err(Rejection::BadTarget("northfolk".into())),
+            "a holder of an office that cannot be appointed away"
+        );
+        assert_eq!(
+            try_appoint("duke", None),
+            Err(Rejection::MissingChoice {
+                action: "appoint".into(),
+                options,
+            })
+        );
+        assert_eq!(
+            try_appoint("duke", Some("official")),
+            Err(Rejection::AlreadyHolds {
+                character: "duke".into(),
+                office: "official".into(),
+            })
+        );
+        assert!(matches!(
+            check_choice(&s, "crown", "queen", "decree", None, Some("official")),
+            Err(Rejection::UnexpectedChoice { .. })
+        ));
+
+        let events = s.close(&[appoint("crown", "queen", "pirate_king", "cohort")]);
+        assert!(any_kind(&events, |k| matches!(
+            k,
+            EventKind::ActionRejected { reason, .. } if reason.contains("not a valid target")
+        )));
+        assert!(!any_kind(&events, |k| matches!(
+            k,
+            EventKind::OfficeChanged { .. }
+        )));
+        assert_eq!(
+            s.state.characters[&"pirate_king".into()].office.as_str(),
+            "head_of_state"
+        );
     }
 
     #[test]

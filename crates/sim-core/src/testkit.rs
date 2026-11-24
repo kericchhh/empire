@@ -95,6 +95,19 @@ pub fn act(seat: &str, character: &str, action: &str, target: Option<&str>) -> T
             character: character.into(),
             action: action.into(),
             target: target.map(str::to_owned),
+            choice: None,
+        }),
+    }
+}
+
+pub fn appoint(seat: &str, character: &str, target: &str, office: &str) -> TurnInput {
+    TurnInput {
+        seat: seat.into(),
+        submission: Submission::Order(Order::Action {
+            character: character.into(),
+            action: "appoint".into(),
+            target: Some(target.into()),
+            choice: Some(office.into()),
         }),
     }
 }

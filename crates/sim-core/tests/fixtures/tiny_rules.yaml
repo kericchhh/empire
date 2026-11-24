@@ -1,5 +1,5 @@
 metrics:
-  - { id: treasury, name: Treasury, initial: 100, visible_to: [head_of_state] }
+  - { id: treasury, name: Treasury, initial: 100, visible_to: [head_of_state, steward] }
   - { id: stability, name: Stability, initial: 0.5, min: 0, max: 1 }
 region_stats:
   - { id: unrest, name: Unrest, initial: 0.2, start_range: [0.1, 0.3], min: 0, max: 1 }
@@ -9,10 +9,15 @@ offices:
   - id: head_of_state
     name: Head of state
     public: true
-    actions: [decree, feast, spy]
+    actions: [decree, feast, spy, appoint]
   - id: official
     name: Official
+    appointable: true
     actions: [plot]
+  - id: steward
+    name: Steward
+    appointable: true
+    actions: [feast]
   - id: cohort
     name: Populace
     actions: [work]
@@ -34,6 +39,10 @@ actions:
     target: character
     secret: true
     effects: [{ target: { target_resource: influence }, delta: -1 }]
+  - id: appoint
+    name: Appoint
+    target: own_character
+    choice: office
   - id: plot
     name: Plot
     cost: { influence: 1 }
