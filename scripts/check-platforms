@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+rev=${1:-HEAD}
+hits=$(git grep -n -E 'cfg!?\((not\()?(unix|windows)\)|target_(os|family) = "windows"|\bWindows\b' "$rev" -- '*.rs' \
+  | grep -v -E '^([^:]+:)?crates/sim-runner/src/lib.rs:[0-9]+:#\[cfg\(not\(unix\)\)\]$')
+[ -z "$hits" ] && { echo "check-platforms: ok"; exit 0; }
+echo "check-platforms: Empire runs on Linux and macOS only (AGENTS.md). Write Unix code directly, as crates/sim-runner/src/fs.rs does, and branch only on target_os = \"linux\" or \"macos\":" >&2
+echo "$hits" >&2
+exit 1
