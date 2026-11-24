@@ -1,0 +1,24 @@
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "iterate in a stable order: use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "iterate in a stable order: use BTreeSet" },
+  { path = "std::time::Instant", reason = "sim-core is pure: time lives in sim-server" },
+  { path = "std::time::SystemTime", reason = "sim-core is pure: time lives in sim-server" },
+]
+disallowed-methods = [
+  { path = "std::env::var", reason = "sim-core is pure: the environment lives in sim-server" },
+  { path = "std::env::var_os", reason = "sim-core is pure: the environment lives in sim-server" },
+  { path = "std::env::vars", reason = "sim-core is pure: the environment lives in sim-server" },
+  { path = "std::fs::read", reason = "sim-core is pure: files live in sim-server" },
+  { path = "std::fs::read_to_string", reason = "sim-core is pure: files live in sim-server" },
+  { path = "std::fs::write", reason = "sim-core is pure: files live in sim-server" },
+  { path = "std::fs::File::open", reason = "sim-core is pure: files live in sim-server" },
+  { path = "std::fs::File::create", reason = "sim-core is pure: files live in sim-server" },
+  { path = "rand::rng", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::make_rng", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::random", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::random_range", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::random_bool", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::random_iter", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::random_ratio", reason = "draw only from the seeded stream: engine::roll" },
+  { path = "rand::fill", reason = "draw only from the seeded stream: engine::roll" },
+]

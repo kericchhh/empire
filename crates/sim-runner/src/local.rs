@@ -110,6 +110,10 @@ pub fn codex_login() -> Result<PathBuf, LocalError> {
 
 /// `codex login` into Empire's Codex home. It runs outside any sandbox, as the user's own.
 pub fn codex_login_command(codex: &Path) -> Result<std::process::Command, LocalError> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a login is the user's own, not an agent run"
+    )]
     let mut cmd = std::process::Command::new(codex);
     cmd.arg("login").env("CODEX_HOME", codex_home()?);
     Ok(cmd)

@@ -5,6 +5,11 @@
 //! settings and history, or a repository the world happens to sit in. Linux uses `bwrap`
 //! (bubblewrap), macOS `sandbox-exec`.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "this module is the sandbox itself"
+)]
+
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};

@@ -1,0 +1,10 @@
+disallowed-types = [
+  { path = "anyhow::Error", reason = "library code returns thiserror enums; anyhow is for main" },
+  { path = "anyhow::Result", reason = "library code returns thiserror enums; anyhow is for main" },
+  { path = "anyhow::Context", reason = "library code returns thiserror enums; anyhow is for main" },
+]
+disallowed-macros = [
+  { path = "anyhow::anyhow", reason = "library code returns thiserror enums; anyhow is for main" },
+  { path = "anyhow::bail", reason = "library code returns thiserror enums; anyhow is for main" },
+  { path = "anyhow::ensure", reason = "library code returns thiserror enums; anyhow is for main" },
+]

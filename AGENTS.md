@@ -9,8 +9,17 @@ A desktop sandbox where several empires share one world and AI agents play every
 - **Navigate with the code graph.** The repo is indexed by `codebase-memory-mcp` (MCP server `codebase-memory-mcp`, project `home-karim-Code-empire`). To find symbols, callers and impact, use its `search_graph`, `trace_path`, `get_code_snippet` and `get_architecture` before you grep or read whole files. Re-run `index_repository` after large changes. Without the MCP server, the same tools run from the shell: `codebase-memory-mcp cli <tool> --help`.
 - **Check the docs first.** Before using a crate, tool or API, read its documentation for the exact version in `Cargo.lock`: docs.rs, or the crate's source under `~/.cargo/registry/src`. Take best practices from official docs or credible references, such as the Rust API Guidelines or the MCP specification. When the docs disagree with what you remember, follow the docs.
 - **Keep the code tight.** Write the fewest lines that stay clear: no duplication, no dead code, no abstraction without a second user, and comments only for a non-obvious why.
-- **Review every major change.** A major change is one that adds a crate, module, MCP tool or event variant, changes the core model, or touches more than three files. Once it compiles and its tests pass, send a reviewer subagent with a fresh context to check the change against this file and `CODE_RULES.md`. It looks for correctness bugs, rule violations, leaks of nondeterminism or hidden state, and code that could be smaller or simpler without changing behaviour. The change is done once every finding is either fixed or answered with a reason.
-- **Ship every major change as a pull request.** Work on a branch off `main`, never on `main` itself. Commit once `cargo fmt --check`, clippy and the tests pass, push, and open a PR against `main`. Run the review before opening it, or on the open PR. CI's `ci-success` check must be green before merging.
+- **Work in slices.** GitHub milestones and issues are the task list: one issue is one slice is one PR. `/milestone` plans a milestone with the user. The `slice` skill takes an issue to a pull request: a red test, then green, then `verify`, then two reviewers from different model families (`review`), each finding fixed or answered, then the lessons encoded, then the PR. Skills live in `.agents/skills` (`.claude/skills` links there). The user merges every PR.
+- **Review every major change**, slice or not, with the `review` skill in a fresh context. A major change adds a crate, module, MCP tool or event variant, changes the core model, or touches more than three files.
+- **Encode lessons in structure.** When a mistake could recur, make the strongest guard that works: a lint (`clippy.toml` in each crate, `deny.toml`), then a test, then a rule in this file or `CODE_RULES.md`.
+- **Record decisions** the code cannot explain in `docs/decisions/`, one numbered file each, and read an area's records before changing it.
+- **Ship from a branch.** Work on a branch off `main`, never on `main` itself. Commit once `cargo fmt --check`, clippy and the tests pass, push, and open a PR against `main`. CI's `ci-success` check must be green before merging.
+
+## State
+
+- **Built:** in `sim-core`, setting-only scenarios, the standard ruleset, several empires per world, offices, seeded starting numbers and fog of war between empires. In `sim-server`, eight MCP tools, the admin API and the SQLite log. In `sim-runner`, sealed Claude Code, Codex and local-model seats, and prompt-generated worlds. In `app/`, worlds, every empire's and seat's view, the chronicle, interventions and agent setup.
+- **Not yet:** the hex map, actions between empires, office changes, contacts between empires, and a game-master seat for agents.
+- Planned and open work is in GitHub milestones and issues.
 
 ## Core model
 
@@ -40,6 +49,9 @@ The game runs on Linux and macOS only. Windows is a later feature: write no Wind
 | `crates/sim-runner` | Launches the user's agent CLI (Claude Code, or Codex on a subscription or a local model server): a fresh, sandboxed headless run per seat each turn, and the author run that turns a prompt into a scenario the engine then validates. One provider may play any number of seats of any empires. |
 | `app/` | Tauri desktop app: a React UI (`app/src`) and its Rust backend (`app/src-tauri`), which hosts worlds in-process through `sim_server::host`. Creating and opening worlds, every empire and every seat's view, the chronicle, interventions and agent setup. The hex map, diplomacy graph and timeline come with the features behind them. |
 | `scenarios/` | Scenario files. `rome.yaml` is the reference scenario: Rome and Parthia in 27 BC. |
+| `scripts/` | Developer scripts. `verify-world.sh` runs a headless world and prints every seat's view. |
+| `docs/decisions/` | Decision records: what was decided, why, and what follows from it. |
+| `.agents/skills/` | The workflow's skills: `milestone`, `slice`, `verify`, `review`. |
 | `schema/` | `scenario.schema.json`, generated by `sim-server schema`. Regenerate it whenever scenario types change. |
 
 If a change alters the core model or a crate's ownership above, update this file in the same change.

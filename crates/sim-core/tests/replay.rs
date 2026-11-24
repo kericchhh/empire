@@ -1,8 +1,10 @@
 use proptest::prelude::*;
 use sim_core::engine::{self, close_tick};
+use sim_core::perceive::{Sight, can_see, describe};
 use sim_core::ruleset::TargetKind;
 use sim_core::{
-    Effect, Event, Order, Ruling, Scenario, SeatId, State, Submission, Target, TurnInput, World,
+    Effect, EmpireId, Event, EventKind, Order, Ruling, Scenario, SeatId, State, Submission, Target,
+    TurnInput, World, perceive,
 };
 
 const ROME: &str = include_str!("../../../scenarios/rome.yaml");
@@ -165,6 +167,56 @@ fn rome() -> World {
     World::standard(Scenario::from_yaml(ROME).unwrap()).unwrap()
 }
 
+fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
+    match t {
+        Target::Metric { empire, .. } => Some(empire),
+        Target::Stat { region, .. } => state.regions.get(region).map(|r| &r.owner),
+        Target::Resource { character, .. } => state.characters.get(character).map(|c| &c.empire),
+    }
+}
+
+/// Changes everything of other empires that `ours` must not see: their numbers, their notes,
+/// and every logged delta whose target or scale belongs to them.
+fn shift_foreign(state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
+    let foreign = |t: &Target| owner(state, t).is_some_and(|e| e != ours);
+    let shift = |mut e: Event| {
+        if let EventKind::ActionResolved { effects, .. }
+        | EventKind::FreeformRuled { effects, .. }
+        | EventKind::RuleFired { effects, .. }
+        | EventKind::Intervention { effects, .. } = &mut e.kind
+        {
+            effects
+                .iter_mut()
+                .filter(|f| foreign(&f.target) || f.scaled_by.as_ref().is_some_and(foreign))
+                .for_each(|f| f.delta += 1.0);
+        }
+        e
+    };
+    let mut s = state.clone();
+    for (id, es) in &mut s.empires {
+        if id != ours {
+            es.metrics.values_mut().for_each(|v| *v += 1.0);
+        }
+    }
+    for rs in s.regions.values_mut().filter(|r| &r.owner != ours) {
+        rs.stats.values_mut().for_each(|v| *v += 1.0);
+    }
+    for cs in s.characters.values_mut().filter(|c| &c.empire != ours) {
+        cs.resources.values_mut().for_each(|v| *v += 1.0);
+        cs.notes.push("A hidden thought".into());
+    }
+    s.recent = s.recent.into_iter().map(shift).collect();
+    (s, log.iter().cloned().map(shift).collect())
+}
+
+fn chronicle(w: &World, state: &State, log: &[Event], seat: &SeatId) -> Vec<String> {
+    let sight = Sight::of_seat(w, state, seat).unwrap();
+    log.iter()
+        .filter(|e| can_see(w, seat, e))
+        .filter_map(|e| describe(w, e, &sight))
+        .collect()
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -190,5 +242,19 @@ proptest! {
     fn the_same_seed_and_steps_produce_the_same_history(seed in any::<u64>(), ticks in history()) {
         let w = rome();
         prop_assert_eq!(run(&w, seed, &ticks).1, run(&w, seed, &ticks).1);
+    }
+
+    #[test]
+    fn no_seat_sees_anything_hidden_of_another_empire(seed in any::<u64>(), ticks in history()) {
+        let w = rome();
+        let (state, log) = run(&w, seed, &ticks);
+        for (empire, seat) in w.scenario.seats() {
+            let (other, other_log) = shift_foreign(&state, &log, &empire.id);
+            prop_assert_eq!(perceive(&w, &other, &seat.id), perceive(&w, &state, &seat.id));
+            prop_assert_eq!(
+                chronicle(&w, &other, &other_log, &seat.id),
+                chronicle(&w, &state, &log, &seat.id)
+            );
+        }
     }
 }
