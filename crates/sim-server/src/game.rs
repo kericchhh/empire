@@ -12,6 +12,7 @@ use sim_core::{
 };
 use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
+use ts_rs::TS;
 
 use crate::store::{Store, StoreError};
 
@@ -39,7 +40,7 @@ pub struct Config {
     pub autoplay: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
     /// Submit orders, then call end_turn.
@@ -48,7 +49,7 @@ pub enum TurnStatus {
     Waiting,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 pub struct TurnView {
     pub status: TurnStatus,
     pub tick: Tick,
@@ -72,7 +73,7 @@ pub struct EndTurnView {
 }
 
 /// Full world for observers. Contains every secret, so it is only served to the admin.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct Overview {
     pub world: World,
     pub state: State,

@@ -5,10 +5,11 @@ use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::ids::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Event {
     pub tick: Tick,
     pub cause: Cause,
@@ -16,7 +17,7 @@ pub struct Event {
     pub kind: EventKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Cause {
     System,
@@ -27,7 +28,7 @@ pub enum Cause {
 }
 
 /// Game-master seats see every event regardless of visibility.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     /// Every seat in the world.
@@ -40,7 +41,7 @@ pub enum Visibility {
 }
 
 /// A concrete number to change. Ruleset effects resolve to these before they are logged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
     Metric {
@@ -77,7 +78,7 @@ impl Target {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Effect {
     pub target: Target,
     pub delta: f64,
@@ -87,7 +88,7 @@ pub struct Effect {
     pub scaled_by: Option<Target>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum EventKind {
     WorldStarted {
@@ -163,7 +164,7 @@ pub enum EventKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct StartingValue {
     pub target: Target,
     pub value: f64,

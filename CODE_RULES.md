@@ -82,5 +82,5 @@ Apply every rule that touches the code you change. Each rule names what enforces
 |---|---|
 | The Rust backend (`app/src-tauri`) exposes Tauri commands that call `sim_server` and `sim_runner`, and holds no game logic. | judgment, e.g. a command that computes a metric itself |
 | The UI loads state through those commands and refreshes on `world-event`; user actions go through commands such as `intervene`, each becoming an event on the server. | judgment, e.g. the UI editing its copy of the state without an event |
-| The TS types for server data live in `app/src/api.ts`, kept in step with the Rust types they mirror. | judgment (until #39), e.g. a Rust field renamed while `api.ts` keeps the old name |
+| The TS types for server data and Tauri command payloads are generated from Rust into `app/src/bindings/` and are their only TS definition: a type the app reads derives `ts_rs::TS`, and a new root type joins the `bindings` test in `app/src-tauri`. | CI's `test` job fails on stale bindings; judgment for a TS type written by hand |
 | Components style themselves through the CSS variables from the scenario theme. | judgment, e.g. a hard-coded `#c9a227` gold |

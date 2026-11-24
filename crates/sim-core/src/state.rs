@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::event::{Effect, Event, EventKind, Target};
 use crate::ids::*;
@@ -9,7 +10,7 @@ use crate::ruleset::StatDef;
 use crate::world::World;
 
 /// The world at one moment. Built only by `State::new` followed by `apply` for each event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct State {
     pub tick: Tick,
     pub seed: u64,
@@ -25,18 +26,18 @@ pub struct State {
     bounds: Bounds,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct EmpireState {
     pub metrics: BTreeMap<MetricId, f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct RegionState {
     pub owner: EmpireId,
     pub stats: BTreeMap<StatId, f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct CharacterState {
     pub empire: EmpireId,
     pub office: OfficeId,
@@ -45,7 +46,7 @@ pub struct CharacterState {
     pub notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Pending {
     pub character: CharacterId,
     pub text: String,
@@ -54,7 +55,7 @@ pub struct Pending {
 
 type Range = (Option<f64>, Option<f64>);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 struct Bounds {
     metrics: BTreeMap<MetricId, Range>,
     stats: BTreeMap<StatId, Range>,

@@ -1,71 +1,22 @@
-// The app's Tauri commands and the shapes they return, mirroring the Rust types.
+// The app's Tauri commands. The shapes they take and return are generated from Rust into `bindings/`.
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Chronicle } from "./bindings/Chronicle";
+import type { Effect } from "./bindings/Effect";
+import type { Opened } from "./bindings/Opened";
+import type { OpenWorld } from "./bindings/OpenWorld";
+import type { Overview } from "./bindings/Overview";
+import type { Providers } from "./bindings/Providers";
+import type { TurnView } from "./bindings/TurnView";
+
+export type { Chronicle, Effect, Opened, OpenWorld, Overview, Providers, TurnView };
+export type { Entry } from "./bindings/Entry";
+export type { Provider } from "./bindings/Provider";
+export type { Source } from "./bindings/Source";
+export type { Target } from "./bindings/Target";
+
 export type Id = string;
-export type Num = Record<Id, number>;
 
-export interface Stat { id: Id; name: string; description: string }
-export type Region = Stat;
-export interface Character {
-  id: Id; name: string; title: string; office: Id; region: Id;
-  persona: string; goals: string[]; secrets: string[];
-}
-export interface SeatDef { id: Id; name: string; controls: Id[] }
-export interface Empire {
-  id: Id; name: string; description: string; culture: Record<string, string>;
-  regions: Region[]; characters: Character[]; seats: SeatDef[];
-}
-export interface Theme { palette: string[]; font_display?: string; font_body?: string; terms: Record<string, string> }
-export interface Scenario {
-  name: string; description: string; theme: Theme; empires: Empire[];
-  game_master?: { id: Id; name: string };
-}
-export interface Rules { metrics: Stat[]; region_stats: Stat[]; resources: Stat[]; offices: Stat[] }
-export interface State {
-  tick: number;
-  empires: Record<Id, { metrics: Num }>;
-  regions: Record<Id, { owner: Id; stats: Num }>;
-  characters: Record<Id, { empire: Id; office: Id; region: Id; resources: Num; notes: string[] }>;
-  joined: Id[];
-  pending: Record<string, { character: Id; text: string; declared: number }>;
-}
-export interface Overview {
-  world: { scenario: Scenario; rules: Rules };
-  state: State; date: string; last_seq: number; ended_turn: Id[]; chronicle: string[];
-}
-
-export interface Value { id: Id; name: string; value: number }
-export interface Perception {
-  world: { name: string; date: string; tick: number };
-  seat: Id; game_master: boolean; your_empire?: Id;
-  empires: { id: Id; name: string; description: string; culture: Record<string, string>; metrics: Value[] }[];
-  you_play: (Character & { office_description: string; resources: Value[]; notes: string[] })[];
-  regions: { id: Id; name: string; owner: Id; stats: Value[] }[];
-  people: { id: Id; name: string; title: string; office: string; empire: Id }[];
-  recent: string[];
-  pending_rulings: { id: string; character: Id; text: string }[];
-  actions: { id: Id; name: string; description: string }[];
-}
-export interface TurnView { status: "your_turn" | "waiting"; tick: number; date: string; perception?: Perception }
-
-export interface Seat { id: Id; token: string; agent: boolean }
-export interface Opened { name: string; mcp_url: string; seats: Seat[] }
-export interface Entry { seq: number; date: string; text: string }
-export interface Chronicle { last: number; entries: Entry[] }
-
-export type Source = "saved" | { file: string } | { prompt: { text: string; author: string } };
-export interface OpenWorld {
-  name: string; source: Source; seed: number; tick_seconds: number; autoplay: boolean;
-  play_all: string | null; max_concurrent: number;
-}
-export type Target =
-  | { metric: { empire: Id; metric: Id } }
-  | { stat: { region: Id; stat: Id } }
-  | { resource: { character: Id; resource: Id } };
-
-/** Whether an agent CLI is installed, and whether Empire holds a login for it. */
-export interface Provider { version: string | null; connected: boolean }
-export interface Providers { claude: Provider; codex: Provider; sandbox_problem: string | null }
 export type AgentKind = "claude" | "codex";
 export const AGENTS: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
 /** Model choices per agent; "" leaves the choice to the CLI. */
@@ -82,7 +33,7 @@ export const api = {
   overview: () => invoke<Overview>("overview"),
   seatView: (seat: Id) => invoke<TurnView>("seat_view", { seat }),
   chronicle: (after: number) => invoke<Chronicle>("chronicle", { after }),
-  intervene: (title: string, text: string, effects: { target: Target; delta: number }[], empire: Id | null) =>
+  intervene: (title: string, text: string, effects: Effect[], empire: Id | null) =>
     invoke<number>("intervene", { title, text, effects, empire }),
   advanceTick: () => invoke<number>("advance_tick"),
   providers: () => invoke<Providers>("providers"),

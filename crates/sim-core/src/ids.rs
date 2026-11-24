@@ -2,11 +2,12 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 macro_rules! string_id {
     ($($(#[$doc:meta])* $name:ident),* $(,)?) => {$(
         $(#[$doc])*
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, TS)]
         #[serde(transparent)]
         pub struct $name(pub String);
 
@@ -65,6 +66,7 @@ string_id!(
     Serialize,
     Deserialize,
     JsonSchema,
+    TS,
 )]
 #[serde(transparent)]
 pub struct Tick(pub u64);

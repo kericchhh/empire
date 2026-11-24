@@ -13,6 +13,7 @@ use sim_server::game::{Config, Overview, TurnView};
 use sim_server::host::{Hosted, Options, host};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
+use ts_rs::TS;
 
 type Res<T> = Result<T, String>;
 
@@ -37,7 +38,7 @@ fn list_worlds() -> Res<Vec<String>> {
     Ok(names)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 enum Source {
     /// Reopen a saved world.
@@ -50,7 +51,7 @@ enum Source {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 struct OpenWorld {
     name: String,
     source: Source,
@@ -62,14 +63,14 @@ struct OpenWorld {
     max_concurrent: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 struct Seat {
     id: SeatId,
     token: String,
     agent: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 struct Opened {
     name: String,
     mcp_url: String,
@@ -214,7 +215,7 @@ async fn seat_view(state: State<'_, App>, seat: SeatId) -> Res<TurnView> {
     .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 struct Entry {
     seq: i64,
     date: String,
@@ -223,7 +224,7 @@ struct Entry {
 
 /// History in words after `after`, as an all-seeing observer reads it, with the last event read:
 /// many events describe nothing, so the caller resumes from `last`, not from the last entry.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 struct Chronicle {
     last: i64,
     entries: Vec<Entry>,
@@ -291,14 +292,14 @@ async fn advance_tick(state: State<'_, App>) -> Res<u64> {
 
 /// Which agent CLIs are installed and connected to Empire, and why agent runs cannot be
 /// sandboxed on this machine, if they cannot. Runs no model.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 struct Providers {
     claude: Provider,
     codex: Provider,
     sandbox_problem: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 struct Provider {
     version: Option<String>,
     connected: bool,
@@ -381,4 +382,25 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("the app window could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ts_rs::Config;
+
+    /// Regenerates `app/src/bindings`, the app's only TS definition of these types.
+    #[test]
+    fn bindings() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings");
+        let _ = std::fs::remove_dir_all(dir);
+        let cfg = Config::new().with_out_dir(dir).with_large_int("number");
+        Overview::export_all(&cfg).unwrap();
+        TurnView::export_all(&cfg).unwrap();
+        Effect::export_all(&cfg).unwrap();
+        OpenWorld::export_all(&cfg).unwrap();
+        Opened::export_all(&cfg).unwrap();
+        Chronicle::export_all(&cfg).unwrap();
+        Providers::export_all(&cfg).unwrap();
+    }
 }
