@@ -290,6 +290,27 @@ async fn an_intervention_can_be_announced_to_one_empire() {
 }
 
 #[tokio::test]
+async fn end_turn_names_no_seat_of_another_empire() {
+    let s = Server::of(common::THREE).await;
+    let (vale, marsh) = (s.mcp().await, s.mcp().await);
+    ok(call(&vale, "join", json!({ "seat_token": s.tok("vale") })).await);
+    let ended = ok(call(
+        &marsh,
+        "end_turn",
+        json!({ "seat_token": s.tok("marsh"), "tick": 0 }),
+    )
+    .await);
+    assert_eq!(
+        ended["tick_closed"], false,
+        "the vale has not ended its turn"
+    );
+    assert!(
+        !ended["waiting_for"].to_string().contains("vale"),
+        "{ended}"
+    );
+}
+
+#[tokio::test]
 async fn an_intervention_introduces_two_empires_that_had_never_met() {
     let s = Server::of(common::THREE).await;
     let c = s.mcp().await;

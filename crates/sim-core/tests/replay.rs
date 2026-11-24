@@ -23,6 +23,7 @@ enum Step {
     Note(usize),
     Intervene(usize, i32),
     Introduce(usize, usize),
+    Join(usize),
     RuleFirstPending(bool, i32),
 }
 
@@ -35,6 +36,7 @@ fn step() -> impl Strategy<Value = Step> {
         1 => any::<usize>().prop_map(Step::Note),
         1 => (any::<usize>(), -100..100i32).prop_map(|(t, d)| Step::Intervene(t, d)),
         1 => (any::<usize>(), any::<usize>()).prop_map(|(a, b)| Step::Introduce(a, b)),
+        1 => any::<usize>().prop_map(Step::Join),
         1 => (any::<bool>(), -20..20i32).prop_map(|(p, d)| Step::RuleFirstPending(p, d)),
     ]
 }
@@ -145,6 +147,12 @@ fn run(w: &World, seed: u64, ticks: &[Vec<Step>]) -> (State, Vec<Event>) {
                     let (seat, from) = &players[a % players.len()];
                     let to = &players[b % players.len()].1;
                     if let Ok(e) = engine::message(w, &state, seat, from, to, "We should talk") {
+                        push(&mut state, &mut log, e);
+                    }
+                }
+                Step::Join(i) => {
+                    let seat = &players[i % players.len()].0;
+                    if let Ok(Some(e)) = engine::join(w, &state, seat) {
                         push(&mut state, &mut log, e);
                     }
                 }
@@ -358,12 +366,23 @@ fn shift_foreign(
     }
     s.recent = s.recent.into_iter().filter_map(shift).collect();
     let mut w = w.clone();
+    for e in w.scenario.empires.iter_mut().filter(|e| &e.id != ours) {
+        for c in &mut e.characters {
+            c.persona.push_str(secret);
+            c.goals.push(secret.into());
+            c.secrets.push(secret.into());
+        }
+        for seat in &mut e.seats {
+            seat.name.push_str(secret);
+        }
+    }
     for e in w.scenario.empires.iter_mut().filter(|e| unmet(&e.id)) {
         e.name.push_str(secret);
         e.description.push_str(secret);
         e.culture.insert("hidden".into(), secret.into());
         for r in &mut e.regions {
             r.name.push_str(secret);
+            r.description.push_str(secret);
         }
         for c in &mut e.characters {
             c.name.push_str(secret);
