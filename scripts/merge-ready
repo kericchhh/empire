@@ -22,7 +22,7 @@ read -r verdict verifier < <(jq -r --arg pid "$pid" '
     select(field("Verdict") != "") | {v: field("Verdict"), p: field("Patch-id"), who: field("Verifier")}]
   | map(select(.p == $pid)) | last // empty | "\(.v) \(.who)"' <<<"$json") || true
 case $verdict in
-  "") fail "no verdict for patch-id $pid: a fresh agent that built none of it runs the slice skill's verify-verdict step" ;;
+  "") fail "no verdict for patch-id $pid: a fresh agent that built none of the PR posts one (the slice skill's Verdict step)" ;;
   PASS | PASS+NOTES) [ -n "$verifier" ] || fail "the verdict for patch-id $pid names no Verifier" ;;
   *) fail "the latest verdict for patch-id $pid is $verdict, not PASS or PASS+NOTES" ;;
 esac
