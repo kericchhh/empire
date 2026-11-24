@@ -206,6 +206,7 @@ fn owner<'a>(state: &'a State, t: &'a Target) -> Option<&'a EmpireId> {
 /// plans, where their characters stand, which private offices they hold and which offices
 /// they move between, every logged delta whose target or scale is theirs, and the words of
 /// every event they caused that reaches none of ours.
+#[expect(clippy::too_many_lines, reason = "split in #48")]
 fn shift_foreign(w: &World, state: &State, log: &[Event], ours: &EmpireId) -> (State, Vec<Event>) {
     let foreign = |t: &Target| owner(state, t).is_some_and(|e| e != ours);
     let theirs = |c: &CharacterId| state.characters.get(c).is_some_and(|c| &c.empire != ours);

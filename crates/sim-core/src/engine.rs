@@ -475,6 +475,7 @@ fn resolve_effects(state: &State, scope: &Scope, defs: &[EffectDef]) -> Option<V
 
 /// Effects of an action, including its cost as negative resource effects, and the event its
 /// choice causes, if any.
+#[expect(clippy::too_many_lines, reason = "split in #45")]
 fn resolve_action<'a>(
     w: &'a World,
     state: &State,
@@ -622,6 +623,7 @@ fn resolve_action<'a>(
 
 /// Resolve every submission of the current tick, run the rules, and advance to the next tick.
 /// Inputs are processed grouped by seat, in submission order within a seat.
+#[expect(clippy::too_many_lines, reason = "split in #45")]
 pub fn close_tick(w: &World, state: &State, inputs: &[TurnInput]) -> Vec<Event> {
     let tick = state.tick;
     let mut log = Log {

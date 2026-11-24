@@ -246,7 +246,7 @@ async fn chronicle(state: State<'_, App>, after: i64) -> Res<Chronicle> {
                 .events_after(c.last, PAGE)
                 .await
                 .map_err(err)?;
-            let full = page.len() as i64 == PAGE;
+            let full = i64::try_from(page.len()) == Ok(PAGE);
             for (seq, e) in page {
                 c.last = seq;
                 if let Some(text) = describe(&w, &e, &Sight::all()) {

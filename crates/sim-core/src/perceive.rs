@@ -148,6 +148,7 @@ pub fn can_see(w: &World, seat: &SeatId, e: &Event) -> bool {
 }
 
 /// `None` for an unknown seat.
+#[expect(clippy::too_many_lines, reason = "split in #48")]
 pub fn perceive(w: &World, state: &State, seat: &SeatId) -> Option<Perception> {
     let sref = w.seat(seat)?;
     let gm = sref.game_master;
@@ -466,6 +467,7 @@ fn condition_visible(
 
 /// One chronicle line, or `None` for bookkeeping events. Agent-written text is quoted so it
 /// reads as in-world speech, never as instructions.
+#[expect(clippy::too_many_lines, reason = "split in #48")]
 pub fn describe(w: &World, e: &Event, sight: &Sight) -> Option<String> {
     Some(match &e.kind {
         EventKind::WorldStarted { .. }

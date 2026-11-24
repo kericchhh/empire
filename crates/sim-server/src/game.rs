@@ -150,7 +150,7 @@ impl Game {
                 .iter()
                 .map(|(s, t)| (t.clone(), s.clone()))
                 .collect(),
-            last_seq: events.len() as i64,
+            last_seq: i64::try_from(events.len()).expect("a Vec holds at most isize::MAX items"),
             w,
             queued: BTreeMap::new(),
             ended_turn: BTreeSet::new(),
@@ -184,7 +184,8 @@ impl Game {
             return Ok(());
         }
         let last = self.store.append(&events).await?;
-        let first = last - events.len() as i64 + 1;
+        let first =
+            last - i64::try_from(events.len()).expect("a Vec holds at most isize::MAX items") + 1;
         for (seq, e) in (first..).zip(events) {
             inner.state.apply(&e);
             let _ = self.events_tx.send((seq, e));
