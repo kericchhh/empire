@@ -9,7 +9,7 @@ A slice is one issue, one branch, one PR. The issue's _Done when_ is the contrac
 
 ## Steps
 
-1. **Claim.** Take the issue you were given, or the next one: the lowest-numbered open issue in the oldest open milestone whose _Depends on_ issues are all closed. Then `git fetch` and branch `<area>/<slug>` from `origin/main`. Link the issue to this thread when the host offers it.
+1. **Claim.** Take the issue you were given, or the next one: the lowest-numbered open issue in the oldest open milestone whose _Depends on_ issues are all closed. Then `git fetch` and branch `<area>/<slug>` from `origin/main`. If a _Depends on_ issue is still open, read its files from its PR branch (`git show origin/<branch>:<path>`) without merging it in, and rebase onto `origin/main` once it lands; if it has not landed when you open the PR, say so in the PR. Link the issue to this thread when the host offers it.
 2. **Find the seam.** Locate the modules the issue touches with the code graph. If the issue changes a module's interface, design it with the `codebase-design` vocabulary before you code. If the work turns out to change the core model in a way the issue does not state, stop and ask the user.
 3. **Go red.** Write the test that encodes _Done when_ before the code, and watch it fail for the right reason. Its failing output goes under `## Verified`.
 4. **Go green.** Implement until it passes, keeping the code tight. Then run the finish line from `CODE_RULES.md`, regenerate `schema/` if scenario types changed, and update `AGENTS.md` (State, Workspace) or add a `docs/decisions/` record when the slice changes what they say.
