@@ -137,9 +137,27 @@ jobs:
           tool: cargo-deny@0.22
       - run: cargo deny --locked check
 
+  pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - run: scripts/test-pr-check
+      - if: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/pr-check ${{ github.event.pull_request.number }}
+
   ci-success:
     if: ${{ always() }}
-    needs: [fmt, clippy, test, macos-sandbox, doc, schema, scenarios, frontend, deny]
+    needs: [fmt, clippy, test, macos-sandbox, doc, schema, scenarios, frontend, deny, pr]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

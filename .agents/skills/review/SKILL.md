@@ -30,4 +30,4 @@ Done when every class has been checked against every changed file, and every rep
 
 ## Report
 
-One list, most severe first. Per finding: class, `file:line`, the claim, its proof, and the smallest fix. Severity is `bug` (wrong behaviour or a leak), `rule` (breaks a written rule), `tight` or `nit`. With no findings, say so and list what you checked.
+One list, most severe first. Per finding: class, `file:line`, the claim, its proof, and the smallest fix. The builder copies each finding into the PR's `## Review` as one list item ending `Fixed`, `Answered: <reason>` or `Deferred #<issue>`, so keep each finding to one item. Severity is `bug` (wrong behaviour or a leak), `rule` (breaks a written rule), `tight` or `nit`. With no findings, say so and list what you checked.

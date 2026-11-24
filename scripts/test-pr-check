@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit
+fixtures=scripts/fixtures/pr-check
+stub=$(mktemp -d)
+trap 'rm -rf "$stub"' EXIT
+cat > "$stub/gh" <<'GH'
+#!/usr/bin/env bash
+case $2 in view) cat "$BODY" ;; diff) git diff --name-only "$RANGE" ;; esac
+GH
+chmod +x "$stub/gh"
+failed=0
+
+check() {
+  local name=$1 want=$2 expect=$3 out status
+  printf '%s' "$4" > "$stub/body"
+  out=$(PATH=$stub:$PATH BODY=$stub/body RANGE=$5 scripts/pr-check 0 2>&1) && status=pass || status=fail
+  if [ "$status" = "$want" ] && grep -qF -- "$expect" <<<"$out"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: wanted $want with '$expect', got $status:"; echo "$out"; failed=1
+  fi
+}
+
+good=$(cat $fixtures/good.md)
+check "PR #7 defers without an issue" fail "open an issue and end the finding with 'Deferred #<issue>'" "$(cat $fixtures/pr7.md)" e107f38..e107f38
+check "e107f38 weakens a rule without saying so" fail "(AGENTS.md CODE_RULES.md), so add '## Rule changes'" "$good" e107f38^..e107f38
+check "a body in the new format passes" pass "ok" "$good" e107f38..e107f38
+check "a rule change that says so passes" pass "ok" "$good"$'\n\n## Rule changes\n\nThe ts-rs rule is dropped: the app has no generator yet.' e107f38^..e107f38
+exit $failed

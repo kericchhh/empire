@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pr=${1:?usage: scripts/pr-check <pr-number>}
+body=$(gh pr view "$pr" --json body -q .body | tr -d '\r')
+files=$(gh pr diff "$pr" --name-only)
+
+failed=0
+fail() { echo "pr-check: $*" >&2; failed=1; }
+section() { awk -v h="$1" '/^## / { on = ($0 ~ "^## " h "[[:space:]]*$"); next } on' <<<"$body"; }
+present() { [ -n "$(section "$1" | tr -d '[:space:]')" ]; }
+
+present Verified || fail "add '## Verified' with each verify command and the output lines that prove the claim"
+present Review || fail "add '## Review' with each finding and its outcome, or 'No findings'"
+present Reflect || fail "add '## Reflect': for each finding, what would have caught it first and where that is now encoded"
+
+outcome='(^|[^[:alnum:]])(Fixed|Answered: .*[^[:space:]]|Deferred #[0-9]+)\.?[[:space:]]*$'
+while IFS= read -r finding; do
+  [[ $finding =~ $outcome ]] && continue
+  if [[ $finding =~ [Dd]efer ]]; then
+    fail "a deferred finding names no issue: open an issue and end the finding with 'Deferred #<issue>': $finding"
+  else
+    fail "a finding has no outcome: end it with 'Fixed', 'Answered: <reason>' or 'Deferred #<issue>': $finding"
+  fi
+done < <(section Review | grep -E '^[[:space:]]*[-*+] ')
+
+rules=$(grep -E '^(CODE_RULES\.md|AGENTS\.md|\.agents/skills/.*|(.*/)?clippy\.toml|deny\.toml)$' <<<"$files" || true)
+[ -z "$rules" ] || present 'Rule changes' \
+  || fail "this PR changes rule files ($(paste -sd " " <<<"$rules")), so add '## Rule changes': which rule changed, how, and why"
+
+[ $failed = 0 ] && echo "pr-check: ok"
+exit $failed
