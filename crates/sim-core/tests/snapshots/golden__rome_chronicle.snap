@@ -2,6 +2,7 @@
 source: crates/sim-core/tests/golden.rs
 expression: chronicle
 ---
+- "[Spring, 27 BC] Parthia and Rome have made contact."
 - "[Spring, 27 BC] Raiders strike across the frontier into Parthava (Wealth in Parthava -0.05, Unrest in Parthava +0.1, Military strength of Parthia -0.02)"
 - "[Spring, 27 BC] With the army of Parthia weakened, the frontiers grow bolder (Frontier exposure in Media +0.05, Frontier exposure in Mesopotamia +0.05, Frontier exposure in Parthava +0.05)"
 - "[Summer, 27 BC] Raiders strike across the frontier into Media (Wealth in Media -0.05, Unrest in Media +0.1, Military strength of Parthia -0.02)"

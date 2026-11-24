@@ -21,6 +21,10 @@ pub struct Scenario {
     #[serde(default)]
     pub theme: Theme,
     pub empires: Vec<EmpireDef>,
+    /// Pairs of empires that know each other at the start. Empires in no pair have never met:
+    /// neither knows the other exists until an event introduces them.
+    #[serde(default)]
+    pub contacts: Vec<[EmpireId; 2]>,
     /// A seat that sees everything and rules on free-form actions.
     #[serde(default)]
     pub game_master: Option<GameMasterDef>,
@@ -191,6 +195,26 @@ impl Scenario {
         unique("region", self.regions().map(|(_, r)| r.id.as_str()))?;
         unique("character", self.characters().map(|(_, c)| c.id.as_str()))?;
         unique("seat", self.seat_ids().map(SeatId::as_str))?;
+        let mut met = BTreeSet::new();
+        for [a, b] in &self.contacts {
+            if let Some(e) = [a, b]
+                .into_iter()
+                .find(|e| self.empires.iter().all(|x| &x.id != *e))
+            {
+                return Err(unknown("contacts", "empire", e.as_str()));
+            }
+            if a == b {
+                return Err(invalid(format!(
+                    "empire `{a}` cannot be in contact with itself"
+                )));
+            }
+            if !met.insert(BTreeSet::from([a, b])) {
+                return Err(DefinitionError::Duplicate {
+                    kind: "contact",
+                    id: format!("{a}, {b}"),
+                });
+            }
+        }
 
         for e in &self.empires {
             if e.regions.is_empty() {
@@ -315,6 +339,25 @@ mod tests {
                 "case {i}"
             );
         }
+    }
+
+    #[test]
+    fn contacts_pair_two_different_empires_of_the_scenario_once() {
+        assert!(matches!(
+            with(|s| s.contacts.push(["kingdom".into(), "atlantis".into()])),
+            Err(DefinitionError::Unknown { kind: "empire", .. })
+        ));
+        assert!(matches!(
+            with(|s| s.contacts.push(["isles".into(), "isles".into()])),
+            Err(DefinitionError::Invalid(_))
+        ));
+        assert!(matches!(
+            with(|s| s.contacts.push(["isles".into(), "kingdom".into()])),
+            Err(DefinitionError::Duplicate {
+                kind: "contact",
+                ..
+            })
+        ));
     }
 
     #[test]

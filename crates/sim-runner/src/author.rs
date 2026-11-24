@@ -95,6 +95,8 @@ pub fn prompt(rules: &Ruleset, request: &str, rejected: Option<(&str, &str)>) ->
          - Ids are short lowercase words joined by `_`, unique across the whole scenario.\n\
          - Give characters personas, goals and secrets that pull against each other, inside \
          their empire and across empires.\n\
+         - List in `contacts` each pair of empires that know each other at the start, as \
+         the setting has it. An empire in no pair knows nobody until it meets someone.\n\
          - Leave out every `start` value unless the request gives numbers: the engine draws \
          them from the seed.\n\
          - Leave out `game_master` unless the request asks for one.\n"
@@ -244,6 +246,7 @@ mod tests {
             assert!(p.contains(&format!("`{}`", o.id)), "{}", o.id);
         }
         assert!(p.contains("pirates of the outer rim") && !p.contains("<draft>"));
+        assert!(p.contains("`contacts`"));
         let p = prompt(
             &rules,
             "x",

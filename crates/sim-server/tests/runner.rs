@@ -141,7 +141,7 @@ async fn start(body: &str, extra: &str) -> Setup {
 async fn start_with_deadline(body: &str, extra: &str, deadline: Duration) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let claude = fake_claude(dir.path(), body);
-    let (created, addr) = common::serve(deadline).await;
+    let (created, addr) = common::serve(common::TINY, deadline).await;
     tokio::spawn(created.game.clone().run_scheduler());
 
     let seats: String = SEATS

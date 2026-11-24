@@ -47,6 +47,7 @@ pub fn router(game: Game, cfg: HttpConfig) -> Router {
         .route("/overview", get(overview))
         .route("/events", get(events))
         .route("/intervene", post(intervene))
+        .route("/introduce", post(introduce))
         .route("/tick", post(tick))
         .route_layer(middleware::from_fn_with_state(api.clone(), require_admin))
         .with_state(api);
@@ -146,6 +147,20 @@ async fn intervene(
         .game
         .intervene(&b.title, &b.text, b.effects, b.empire.as_ref())
         .await?;
+    Ok(Json(json!({ "seq": seq })))
+}
+
+#[derive(Deserialize)]
+struct IntroduceBody {
+    a: EmpireId,
+    b: EmpireId,
+}
+
+async fn introduce(
+    State(api): State<Api>,
+    Json(b): Json<IntroduceBody>,
+) -> Result<Json<Value>, GameError> {
+    let seq = api.game.introduce(&b.a, &b.b).await?;
     Ok(Json(json!({ "seq": seq })))
 }
 

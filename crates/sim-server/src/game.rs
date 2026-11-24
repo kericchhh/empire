@@ -67,7 +67,7 @@ pub struct OrderResult {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EndTurnView {
     pub tick_closed: bool,
-    /// Joined seats that have not ended their turn yet.
+    /// Joined seats of your own empire that have not ended their turn yet.
     pub waiting_for: Vec<SeatId>,
 }
 
@@ -378,13 +378,15 @@ impl Game {
             self.commit(&mut inner, vec![e]).await?;
         }
         inner.ended_turn.insert(seat.clone());
-        let waiting_for: Vec<SeatId> = inner
+        let mut waiting_for: Vec<SeatId> = inner
             .state
             .joined
             .difference(&inner.ended_turn)
             .cloned()
             .collect();
         let tick_closed = waiting_for.is_empty();
+        let own = inner.w.seat(&seat).and_then(|s| s.empire);
+        waiting_for.retain(|s| own.is_none() || inner.w.seat(s).is_some_and(|r| r.empire == own));
         if tick_closed && let Err(e) = self.close(&mut inner).await {
             inner.ended_turn.remove(&seat);
             return Err(e);
@@ -446,6 +448,14 @@ impl Game {
     ) -> Result<i64, GameError> {
         let mut inner = self.inner.lock().await;
         let e = engine::intervene(&inner.w, &inner.state, title, text, effects, audience)?;
+        self.commit(&mut inner, vec![e]).await?;
+        Ok(inner.last_seq)
+    }
+
+    /// Two empires that have not met learn of each other.
+    pub async fn introduce(&self, a: &EmpireId, b: &EmpireId) -> Result<i64, GameError> {
+        let mut inner = self.inner.lock().await;
+        let e = engine::introduce(&inner.state, a, b)?;
         self.commit(&mut inner, vec![e]).await?;
         Ok(inner.last_seq)
     }

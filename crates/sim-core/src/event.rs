@@ -157,6 +157,11 @@ pub enum EventKind {
         text: String,
         effects: Vec<Effect>,
     },
+    /// Two empires learn of each other.
+    EmpiresMet {
+        a: EmpireId,
+        b: EmpireId,
+    },
     TickEnded {
         /// Consecutive-tick counters for rule and ending conditions after this tick.
         streaks: BTreeMap<String, u32>,

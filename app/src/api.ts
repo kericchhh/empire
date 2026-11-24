@@ -18,7 +18,7 @@ export interface Empire {
 export interface Theme { palette: string[]; font_display?: string; font_body?: string; terms: Record<string, string> }
 export interface Scenario {
   name: string; description: string; theme: Theme; empires: Empire[];
-  game_master?: { id: Id; name: string };
+  contacts: [Id, Id][]; game_master?: { id: Id; name: string };
 }
 export interface Rules { metrics: Stat[]; region_stats: Stat[]; resources: Stat[]; offices: Stat[] }
 export interface State {
@@ -27,6 +27,7 @@ export interface State {
   regions: Record<Id, { owner: Id; stats: Num }>;
   characters: Record<Id, { empire: Id; office: Id; region: Id; resources: Num; notes: string[] }>;
   joined: Id[];
+  contacts: [Id, Id][];
   pending: Record<string, { character: Id; text: string; declared: number }>;
 }
 export interface Overview {
@@ -84,6 +85,7 @@ export const api = {
   chronicle: (after: number) => invoke<Chronicle>("chronicle", { after }),
   intervene: (title: string, text: string, effects: { target: Target; delta: number }[], empire: Id | null) =>
     invoke<number>("intervene", { title, text, effects, empire }),
+  introduce: (a: Id, b: Id) => invoke<number>("introduce", { a, b }),
   advanceTick: () => invoke<number>("advance_tick"),
   providers: () => invoke<Providers>("providers"),
   saveClaudeToken: (token: string) => invoke<void>("save_claude_token", { token }),

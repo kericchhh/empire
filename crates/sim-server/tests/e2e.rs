@@ -24,7 +24,11 @@ type Client = RunningService<RoleClient, ClientConfig>;
 
 impl Server {
     async fn start() -> Self {
-        let (created, addr) = common::serve(Duration::from_secs(3600)).await;
+        Self::of(common::TINY).await
+    }
+
+    async fn of(scenario: &str) -> Self {
+        let (created, addr) = common::serve(scenario, Duration::from_secs(3600)).await;
         Self {
             addr,
             admin: created.admin_token,
@@ -283,6 +287,58 @@ async fn an_intervention_can_be_announced_to_one_empire() {
     let c = look(&crown, &s.tok("crown")).await;
     assert!(p.to_string().contains("A storm wrecks the fleet"));
     assert!(!c.to_string().contains("A storm wrecks the fleet"));
+}
+
+#[tokio::test]
+async fn end_turn_names_no_seat_of_another_empire() {
+    let s = Server::of(common::THREE).await;
+    let (vale, marsh) = (s.mcp().await, s.mcp().await);
+    ok(call(&vale, "join", json!({ "seat_token": s.tok("vale") })).await);
+    let ended = ok(call(
+        &marsh,
+        "end_turn",
+        json!({ "seat_token": s.tok("marsh"), "tick": 0 }),
+    )
+    .await);
+    assert_eq!(
+        ended["tick_closed"], false,
+        "the vale has not ended its turn"
+    );
+    assert!(
+        !ended["waiting_for"].to_string().contains("vale"),
+        "{ended}"
+    );
+}
+
+#[tokio::test]
+async fn an_intervention_introduces_two_empires_that_had_never_met() {
+    let s = Server::of(common::THREE).await;
+    let c = s.mcp().await;
+    let token = s.tok("marsh");
+    let marsh = || look(&c, &token);
+    assert!(!marsh().await.to_string().contains("Lord Aren"));
+    let r = s
+        .post("/introduce", json!({ "a": "marsh", "b": "vale" }))
+        .await;
+    assert_eq!(r.status(), 200);
+    let seen = marsh().await.to_string();
+    assert!(seen.contains("Lord Aren"), "{seen}");
+    assert!(
+        seen.contains("The Marsh and The Vale have made contact."),
+        "{seen}"
+    );
+    assert!(
+        !look(&c, &s.tok("ridge"))
+            .await
+            .to_string()
+            .contains("The Marsh")
+    );
+    let again = s
+        .post("/introduce", json!({ "a": "vale", "b": "marsh" }))
+        .await;
+    assert_eq!(again.status(), 422);
+    let body: Value = again.json().await.unwrap();
+    assert_eq!(body["error"], "`vale` and `marsh` already know each other");
 }
 
 #[tokio::test]

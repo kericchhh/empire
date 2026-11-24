@@ -143,9 +143,16 @@ curl -X POST -H "Authorization: Bearer $ADMIN" -H 'content-type: application/jso
 
 `empire` is optional: with it, only that empire's seats hear of the event.
 
+Empires know only the empires they have met: those the scenario lists under `contacts`, and those an intervention introduces. Only the two empires hear of it:
+
+```sh
+curl -X POST -H "Authorization: Bearer $ADMIN" -H 'content-type: application/json' \
+  localhost:7878/api/introduce -d '{"a":"rome","b":"parthia"}'
+```
+
 ## Write a scenario
 
-`--prompt` writes one for you. To write or edit one by hand: a scenario is the starting point and nothing more: the calendar, the theme, the empires with their culture and regions, the characters with their persona, goals, secrets and the office they hold, and the seats that play them. Start from `scenarios/rome.yaml`, and point your editor at `schema/scenario.schema.json` for autocomplete.
+`--prompt` writes one for you. To write or edit one by hand: a scenario is the starting point and nothing more: the calendar, the theme, the empires with their culture and regions, the characters with their persona, goals, secrets and the office they hold, the seats that play them, and which empires already know each other (`contacts`). Start from `scenarios/rome.yaml`, and point your editor at `schema/scenario.schema.json` for autocomplete.
 
 Starting numbers are optional. Set them under `start` on an empire, region or character; anything you leave out is drawn from the seed. The mechanics (numbers, offices, actions, rules) come from the engine's standard ruleset in `crates/sim-core/rules/standard.yaml`, the same for every setting. There are no endings: the world runs until you stop it.
 

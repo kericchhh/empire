@@ -5,16 +5,18 @@ use sim_server::game::{Config, Created, Game};
 use sim_server::http::{HttpConfig, router};
 use sim_server::store::Store;
 
-const TINY: &str = include_str!("../../../sim-core/tests/fixtures/tiny.yaml");
+pub const TINY: &str = include_str!("../../../sim-core/tests/fixtures/tiny.yaml");
+#[allow(dead_code, reason = "each test binary uses its own fixtures")]
+pub const THREE: &str = include_str!("../../../sim-core/tests/fixtures/three.yaml");
 
-/// The tiny world, served over HTTP on an ephemeral loopback port.
-pub async fn serve(tick_deadline: Duration) -> (Created, SocketAddr) {
+/// A world of `scenario`, served over HTTP on an ephemeral loopback port.
+pub async fn serve(scenario: &str, tick_deadline: Duration) -> (Created, SocketAddr) {
     let store = Store::in_memory().await.unwrap();
     let config = Config {
         tick_deadline,
         autoplay: false,
     };
-    let created = Game::open(store, Some(TINY), 7, config).await.unwrap();
+    let created = Game::open(store, Some(scenario), 7, config).await.unwrap();
     let app = router(
         created.game.clone(),
         HttpConfig {

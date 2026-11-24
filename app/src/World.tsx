@@ -82,7 +82,7 @@ export function WorldView({ opened, onClose }: { opened: Opened; onClose: () => 
         {view.kind === "empire" && <Empires o={o} ids={[view.id]} />}
         {view.kind === "seat" && <SeatView key={view.id} seat={view.id} seq={o.last_seq} />}
         {view.kind === "chronicle" && <Chronicle log={log} />}
-        {view.kind === "intervene" && <Intervene o={o} onError={setError} />}
+        {view.kind === "intervene" && <><Intervene o={o} onError={setError} /><Introduce o={o} onError={setError} /></>}
         {view.kind === "seats" && <Seats opened={opened} o={o} />}
       </main>
     </div>
@@ -289,6 +289,27 @@ function Intervene({ o, onError }: { o: Overview; onError: (e: string) => void }
       <div className="row">
         <button className="go" disabled={sending || !title.trim() || !text.trim()} onClick={submit}>Add event</button>
         {done && <span className="muted">{done}</span>}
+      </div>
+    </section>
+  );
+}
+
+/** Two empires that have never met learn of each other. No other empire hears of it. */
+function Introduce({ o, onError }: { o: Overview; onError: (e: string) => void }) {
+  const empires = o.world.scenario.empires;
+  const met = (a: Id, b: Id) => o.state.contacts.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+  const pairs = empires.flatMap((a, i) => empires.slice(i + 1).filter((b) => !met(a.id, b.id)).map((b) => [a, b] as const));
+  if (!pairs.length) return null;
+  return (
+    <section className="card">
+      <h2>Introduce two empires</h2>
+      <p className="muted">They learn of each other and of each other's rulers. No other empire hears of it.</p>
+      <div className="row">
+        {pairs.map(([a, b]) => (
+          <button key={`${a.id}+${b.id}`} onClick={() => api.introduce(a.id, b.id).catch((e) => onError(String(e)))}>
+            {a.name} and {b.name}
+          </button>
+        ))}
       </div>
     </section>
   );

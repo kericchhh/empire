@@ -1,0 +1,42 @@
+name: Three Valleys
+description: Two valley kingdoms trade over the pass. Beyond the marsh, a third people lives unseen.
+calendar: { start_year: 1, periods: [Spring, Summer, Autumn, Winter] }
+empires:
+  - id: vale
+    name: The Vale
+    description: Orchards and a stone keep.
+    culture: { religion: The River Mother }
+    regions:
+      - { id: orchards, name: The Orchards }
+    characters:
+      - { id: lord_vale, name: Lord Aren, title: Lord, office: head_of_state, region: orchards }
+      - { id: vale_folk, name: The Orchard Folk, office: cohort, region: orchards }
+    seats:
+      - { id: vale, name: The Lord of the Vale, controls: [lord_vale] }
+      - { id: vale_folk, name: The Orchard Folk, controls: [vale_folk] }
+  - id: ridge
+    name: The Ridge
+    description: Miners under the peaks.
+    culture: { religion: The Deep Fire }
+    regions:
+      - { id: mines, name: The Mines }
+    characters:
+      - { id: queen_ridge, name: Queen Brann, title: Queen, office: head_of_state, region: mines }
+      - { id: ridge_folk, name: The Miners, office: cohort, region: mines }
+    seats:
+      - { id: ridge, name: The Queen of the Ridge, controls: [queen_ridge, ridge_folk] }
+  - id: marsh
+    name: The Marsh
+    description: Stilt villages no outsider has seen.
+    culture: { religion: The Heron }
+    regions:
+      - { id: reeds, name: The Reeds }
+    characters:
+      - { id: elder_marsh, name: Elder Cail, title: Elder, office: head_of_state, region: reeds }
+      - { id: marsh_folk, name: The Reed Folk, office: cohort, region: reeds }
+      - { id: singer, name: Old Moss, title: Singer, office: private, region: reeds }
+    seats:
+      - { id: marsh, name: The Elder of the Marsh, controls: [elder_marsh, marsh_folk] }
+      - { id: singer, name: The Singer, controls: [singer] }
+contacts: [[vale, ridge]]
+game_master: { id: gm, name: Game Master }

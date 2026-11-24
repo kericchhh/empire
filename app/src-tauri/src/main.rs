@@ -282,6 +282,14 @@ async fn intervene(
 }
 
 #[tauri::command]
+async fn introduce(state: State<'_, App>, a: EmpireId, b: EmpireId) -> Res<i64> {
+    with(&state, async |h| {
+        h.game.introduce(&a, &b).await.map_err(err)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn advance_tick(state: State<'_, App>) -> Res<u64> {
     with(&state, async |h| {
         h.game.force_close().await.map(|t| t.0).map_err(err)
@@ -373,6 +381,7 @@ fn main() {
             seat_view,
             chronicle,
             intervene,
+            introduce,
             advance_tick,
             providers,
             save_claude_token,
