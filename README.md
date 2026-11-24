@@ -18,6 +18,19 @@ On Linux the app needs WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev` on Debian and Ubun
 
 Empire runs on Linux and macOS. On Linux, agent runs are sandboxed with bubblewrap: install `bubblewrap` (on Ubuntu 24.04 and later, also allow unprivileged user namespaces for it). macOS uses its built-in `sandbox-exec`.
 
+For a disposable world that you can drive from one shell, use `scripts/empire`. It needs `cargo`, `curl` and `jq`; it builds and starts a local server, then keeps its tokens and database in a private temporary directory until `stop`:
+
+```sh
+scripts/empire start --scenario scenarios/rome.yaml --seed 2026
+scripts/empire doctor
+scripts/empire views
+scripts/empire tick 1
+scripts/empire chronicle
+scripts/empire stop
+```
+
+See [the verification skill](.agents/skills/verify/SKILL.md) for driving MCP tools, capturing evidence and cleaning up.
+
 Connect Claude Code once. Run `claude setup-token`, which prints a long-lived token for your Claude subscription, then save it for Empire:
 
 ```sh
