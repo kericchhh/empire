@@ -35,6 +35,8 @@ pub enum Visibility {
     /// Every seat of one empire.
     Empire(EmpireId),
     Seats(Vec<SeatId>),
+    /// Every seat of these empires, sorted and deduplicated.
+    Empires(Vec<EmpireId>),
 }
 
 /// A concrete number to change. Ruleset effects resolve to these before they are logged.
