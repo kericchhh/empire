@@ -74,9 +74,10 @@ jobs:
           trap 'EMPIRE_STATE_DIR="$state" scripts/empire stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
           export EMPIRE_STATE_DIR="$state"
           scripts/empire start --scenario scenarios/rome.yaml --tick-seconds 2
-          scripts/empire doctor
-          scripts/empire tool princeps look '{}'
-          scripts/empire tick 1
+          scripts/empire doctor | jq -e '.status == "healthy"'
+          scripts/empire tool princeps look '{}' | jq -e '.perception.seat == "princeps"'
+          scripts/empire tick 1 | jq -e '.closed == [1]'
+          ! scripts/empire tool princeps nosuchtool '{}'
           scripts/empire stop
       - name: No pending snapshots
         run: |

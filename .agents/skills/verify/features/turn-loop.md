@@ -14,4 +14,4 @@ Capture `join` or `wait_for_turn` output and then `end_turn`; confirm the return
 
 ## Gotchas
 
-The call to `end_turn` closes the tick only after all joined seats end it. `wait_for_turn` may return `waiting`; call again. Each call opens an MCP session and uses the seat token saved at launch.
+The call to `end_turn` closes the tick only after all joined seats end it. `wait_for_turn` may return `waiting`; call again.
