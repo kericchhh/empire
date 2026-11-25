@@ -53,7 +53,7 @@ A PR body cannot carry a file, so publish a screenshot on its own signed orphan 
 
 ```sh
 tree=$(printf '100644 blob %s\tsenate.png\n' "$(git hash-object -w "$evidence/senate.png")" | git mktree)
-git push origin "$(git commit-tree "$tree" -m 'Evidence: appointments')":refs/heads/evidence/appointments
+git push origin "$(git commit-tree -S "$tree" -m 'Evidence: appointments')":refs/heads/evidence/appointments
 ```
 
 ## Cleanup
