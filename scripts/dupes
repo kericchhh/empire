@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+npx --yes jscpd@5.4.3 "$@" . || {
+  echo "dupes: move each clone marked [NEW] into one function both places call; for a clone that must stay, run 'scripts/dupes --update-baseline' and say why in the PR" >&2
+  exit 1
+}
