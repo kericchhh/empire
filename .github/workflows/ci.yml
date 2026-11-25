@@ -140,6 +140,16 @@ jobs:
       - run: npx --yes pnpm@10.33.0 install --frozen-lockfile
       - run: npx --yes pnpm@10.33.0 build
 
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/lint
+      - run: scripts/dupes
+
   deny:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -172,7 +182,7 @@ jobs:
 
   ci-success:
     if: ${{ always() }}
-    needs: [fmt, clippy, test, macos-sandbox, doc, schema, scenarios, frontend, deny, pr]
+    needs: [fmt, clippy, test, macos-sandbox, doc, schema, scenarios, frontend, lint, deny, pr]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
