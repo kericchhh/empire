@@ -33,7 +33,7 @@ Done when every class has been checked against every changed file, and every rep
 - **Core model:** a change that breaks an `AGENTS.md` core-model rule without the user having agreed to it.
 - **Tests:** behaviour shipped without a test that fails when it breaks; the leak test not extended for new foreign data (`CODE_RULES.md`, Seats).
 - **Duplication:** for each new function, `search_graph` by name and `search_code` for its distinctive calls to find one that already does the job. For new code in one binary, `crates/sim-server/src/main.rs` or `app/src-tauri/src`, find the same job in the other: one job done two ways in two binaries is a finding, even when the lines differ.
-- **Size:** a function added or grown past 100 lines: `cargo clippy -p <crate> -- -W clippy::too_many_lines` on each changed crate.
+- **Size:** a function the diff adds or grows past 100 lines: `cargo clippy -p <crate> --all-targets -- -W clippy::too_many_lines` on each changed crate, reporting only the functions the diff touches.
 - **Tight:** code that could be smaller or simpler with the same behaviour: dead code, an abstraction with one user, a comment that restates the code.
 - **Drift:** `AGENTS.md` (State, Workspace), `README.md`, a decision record or the schema no longer matching the code, or a rule-table row whose enforcer cannot catch the failure it claims (try the failure and see if the enforcer fires).
 

@@ -14,7 +14,7 @@ Every contributor is an agent that sees only the files it opened, copies the nea
    - merged PRs' `## Review` and `## Reflect`: `gh pr list --state merged --limit 100 --json number`, then `gh pr view <n> --json body`;
    - `debt` issues: `gh issue list --label debt --state all`;
    - in a slice: its review findings and your own mistakes.
-2. **Group into classes.** A class is one mistake an agent could make again somewhere else, e.g. "a `cfg(unix)` guard in code that runs only on Linux and macOS". It counts once it happened twice. List the commits or PR findings behind each one.
+2. **Group into classes.** A class is one mistake an agent could make again somewhere else, e.g. "a `Result` dropped with `let _ =` where a failed write loses data". It counts once it happened twice. List the commits or PR findings behind each one.
 3. **Pick the level.** For each class, take the highest level that works:
    1. Architecture: give each job one owner and one supported way, and delete the old way an agent would copy.
    2. Types: make the bad state fail to compile.
@@ -24,10 +24,10 @@ Every contributor is an agent that sees only the files it opened, copies the nea
 
    Read the rule tables (`AGENTS.md`, `CODE_RULES.md`) first. A class whose rule exists with `judgment` as its enforcer is a repeat: move it up a level.
 4. **Prove it.** Run the new check against the commit that made the mistake, and keep the failing output. A `scripts/` check takes the revision (`git grep … <rev>`); a lint or test runs in a scratch `git worktree add` of that commit, with the check added. Then show it passes on `HEAD`. Until a check has failed on a real past mistake, label it unproven.
-5. **Wire it.** CI runs the same command you ran, and keeps re-proving it against the past commit when that is cheap, as the `check-platforms` steps in CI's `pr` job do. Point the rule's row in the table at the new enforcer, and drop a rule whose mistake can no longer happen. Make one commit per class.
+5. **Wire it.** CI runs the same command you ran, and keeps re-proving it against the past commit when that is cheap, as `scripts/test-check-platforms` does with one fixture per pattern and the past commit. Point the rule's row in the table at the new enforcer, and drop a rule whose mistake can no longer happen. Make one commit per class.
 
 ## Report
 
-Per class: its name, the evidence, the level picked and why no higher one works, and the check's failing output on the past commit. Then the one-offs, and the classes left at `judgment` with the issue that tracks each, or why it stays there.
+Per class: its name, the evidence, the level picked and why no higher one works, and the check's failing output on the past commit. Then the one-offs: listed with their evidence and left without a check, to become a class if they happen again. Then the classes left at `judgment` with the issue that tracks each, or why it stays there.
 
 Done when every class has evidence and a level, every new check has failed on a past commit, and the rule table names it.
