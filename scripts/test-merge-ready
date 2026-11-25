@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -uo pipefail
+script="$(cd "$(dirname "$0")" && pwd)/merge-ready"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+export HOME=$tmp GIT_CONFIG_NOSYSTEM=1 PATH=$tmp/bin:$PATH PR=$tmp/pr.json
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+mkdir "$tmp/bin"
+cat > "$tmp/bin/gh" <<'GH'
+#!/usr/bin/env bash
+case $2 in view) if [ "${6:-}" = -q ]; then jq -r "$7" "$PR"; else cat "$PR"; fi ;; esac
+GH
+chmod +x "$tmp/bin/gh"
+git init -q --bare "$tmp/origin.git"
+git -C "$tmp/origin.git" config uploadpack.allowAnySHA1InWant true
+git init -q -b main "$tmp/work"
+cd "$tmp/work" || exit
+git remote add origin "$tmp/origin.git"
+failed=0
+body=$'## Verified\n\nran it\n\n## Review\n\n- No findings\n\n## Reflect\n\nnothing new'
+
+change() { echo "$1" >> "$1"; git add "$1"; }
+commit() { change "$1"; git commit -qm "$1" ${2:+-m "Builder: $2"}; }
+pr() {
+  local ci=$1; shift
+  git push -qf origin HEAD:refs/heads/feature
+  jq -n --arg head "$(git rev-parse HEAD)" --arg ci "$ci" --arg body "$body" --arg author "${author:-someone}" '{headRefOid: $head,
+    body: $body, author: {login: $author},
+    statusCheckRollup: [{__typename: "CheckRun", name: "ci-success", status: "COMPLETED", conclusion: $ci}],
+    comments: ($ARGS.positional | map({author: {login: "someone"}, authorAssociation: $assoc,
+      includesCreatedEdit: ($edited == "true"), isMinimized: ($hidden == "true"), body: .}))}' \
+    --arg assoc "${assoc:-OWNER}" --arg edited "${edited:-}" --arg hidden "${hidden:-}" --args "$@" > "$PR"
+}
+pid() { "$script" 0 2>/dev/null | awk '$1 == "head" { print $4 }'; }
+verdict() { printf 'Verdict: %s\nHead: %s\nPatch-id: %s\nVerifier: %s\n\nEvidence: drove the feature map.\n' "$1" "$(git rev-parse HEAD)" "$2" "$3"; }
+check() {
+  local name=$1 want=$2 expect=$3 out status
+  out=$("$script" 0 2>&1) && status=ready || status=not
+  if [ "$status" = "$want" ] && grep -qF -- "$expect" <<<"$out"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: wanted $want with '$expect', got $status:"; echo "$out"; failed=1
+  fi
+}
+
+commit base
+git push -q origin main
+git checkout -q -b feature
+pr SUCCESS
+check "a PR with no diff is not ready" not "has no diff against origin/main"
+commit feature builder-1
+pr SUCCESS
+p1=$(pid)
+check "no verdict is not ready" not "no verdict for patch-id $p1"
+v1=$(verdict PASS "$p1" verifier-1)
+pr SUCCESS "$v1"
+check "a PASS from another agent is ready" ready MERGE-READY
+assoc=COLLABORATOR pr SUCCESS "$v1"
+check "a collaborator's PASS is ready" ready MERGE-READY
+assoc=NONE pr SUCCESS "$v1"
+check "a stranger's PASS is ignored" not "no verdict for patch-id $p1"
+pr FAILURE "$v1"
+check "a red ci-success is not ready" not "ci-success is FAILURE"
+pr CANCELLED "$v1"
+check "a cancelled ci-success is not ready" not "ci-success is CANCELLED"
+pr '' "$v1"
+check "a pending ci-success is not ready" not "ci-success is not finished"
+body='' pr SUCCESS "$v1"
+check "a body pr-check refuses is not ready" not "scripts/pr-check 0 fails"
+
+git checkout -q main
+commit unrelated
+git push -q origin main
+git checkout -q feature
+pr SUCCESS "$v1"
+check "a branch behind main is not ready" not "the branch is behind main"
+git merge -q --no-edit main
+pr SUCCESS "$v1"
+check "merging main into the branch keeps the verdict" ready MERGE-READY
+git reset -q --hard HEAD^
+git rebase -q main
+pr SUCCESS "$v1"
+check "a rebase with no change keeps the verdict" ready MERGE-READY
+
+commit fix builder-2
+pr SUCCESS "$v1"
+p2=$(pid)
+check "a change to the diff voids the verdict" not "no verdict for patch-id $p2"
+pr SUCCESS "$v1" "$(verdict PASS "$p2" builder-2)"
+check "a verdict from a builder is refused" not "verifier builder-2 built commit"
+pr SUCCESS "$v1" "$(verdict PASS "$p2" '')"
+check "a verdict with no verifier is refused" not "names no Verifier"
+pr SUCCESS "$(verdict 'PASS (all entries held)' "$p2" builder-2)"
+check "a verdict with words after PASS is refused" not "is 'PASS (all entries held)', not PASS"
+pr SUCCESS "$(verdict 'PASS + NOTES' "$p2" builder-2)"
+check "a spaced PASS + NOTES is refused" not "is 'PASS + NOTES', not PASS"
+pr SUCCESS "$(verdict PASS "$p2" 'builder-2 (claude)')"
+check "a verifier of several words is refused" not "verifier 'builder-2 (claude)' is not one word"
+v2=$(verdict PASS+NOTES "$p2" verifier-2)
+pr SUCCESS "$v1" "$v2"
+check "a fresh verdict after the change is ready" ready MERGE-READY
+edited=true pr SUCCESS "$v2"
+check "an edited verdict is refused" not "was edited or hidden"
+hidden=true pr SUCCESS "$v2"
+check "a hidden verdict is refused" not "was edited or hidden"
+pr SUCCESS "$(verdict PASS "$p2" $'builder-2\t(claude)')"
+check "a verifier with a tab inside is refused" not "is not one word"
+pr SUCCESS "$(verdict PASS "$p2" $'builder-2\t')"
+check "a verifier with a trailing tab is refused" not "is not one word"
+pr SUCCESS "$(verdict $'PASS\nVerdict: FAIL' "$p2" verifier-5)"
+check "a second Verdict line is not ignored" not "is 'PASS FAIL', not PASS"
+pr SUCCESS "$(verdict PASS "$p2" $'verifier-5\nVerifier: builder-2')"
+check "a second Verifier line is not ignored" not "is not one word"
+pr SUCCESS "$v1" "$v2"
+printf 'fix\nfeature\n' > "$tmp/order"
+git config diff.orderFile "$tmp/order"
+check "the diff's file order does not change the patch-id" ready MERGE-READY
+git config --unset diff.orderFile
+pr SUCCESS "$v1" "$v2" "$(verdict FAIL "$p2" verifier-3)"
+check "a later FAIL is refused" not "is 'FAIL', not PASS"
+
+change squash
+git commit -qm $'squash\n\nBuilder: builder-3\n\n* fix\n\nBuilder: builder-4'
+pr SUCCESS
+pr SUCCESS "$(verdict PASS "$(pid)" builder-3)"
+check "a squash keeps every builder" not "verifier builder-3 built commit"
+change paragraph
+git commit -qm $'paragraph\n\nBuilder: builder-5\n\nCo-Authored-By: t <t@example.com>'
+pr SUCCESS
+pr SUCCESS "$(verdict PASS "$(pid)" verifier-4)"
+check "a Builder line in its own paragraph counts" ready MERGE-READY
+builder_line() {
+  change "$1"
+  git commit -q --cleanup=verbatim -m "$1" -m "$3"
+  pr SUCCESS
+  pr SUCCESS "$(verdict PASS "$(pid)" "$2")"
+  check "a Builder line with $1 still names its builder" not "verifier $2 built commit"
+}
+builder_line "trailing spaces" builder-6 "Builder: builder-6   "
+builder_line CRLF builder-8 $'Builder: builder-8\r'
+builder_line "a lowercase second line" builder-9 $'Builder: builder-1\nbuilder: builder-9'
+
+commit unsigned
+pr SUCCESS
+check "a commit with no builder is not ready" not "has no 'Builder: <run id>' trailer"
+git checkout -q -b bump main
+GIT_AUTHOR_NAME='dependabot[bot]' commit bump
+author='dependabot[bot]' pr SUCCESS
+check "a dependabot PR needs only a green ci-success" ready MERGE-READY
+author='dependabot[bot]' pr FAILURE
+check "a dependabot PR still needs ci-success" not "ci-success is FAILURE"
+commit pushed builder-7
+author='dependabot[bot]' pr SUCCESS
+check "a dependabot PR with another author's commit is not exempt" not "no verdict for patch-id"
+exit $failed
