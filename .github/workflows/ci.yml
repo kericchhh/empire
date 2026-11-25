@@ -164,6 +164,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - run: scripts/test-pr-check
+      - run: scripts/check-platforms
+      - run: scripts/test-check-platforms
       - if: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]' }}
         env:
           GH_TOKEN: ${{ github.token }}

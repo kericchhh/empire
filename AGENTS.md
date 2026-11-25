@@ -11,16 +11,18 @@ A desktop sandbox where several empires share one world and AI agents play every
 - **Keep the code tight.** Write the fewest lines that stay clear: no duplication, no dead code, no abstraction without a second user, and comments only for a non-obvious why.
 - **Work in slices.** GitHub milestones and issues are the task list: one issue is one slice is one PR. `/milestone` plans a milestone with the user. The `slice` skill takes an issue to a pull request: a red test, then green, then `verify`, then two reviewers from different model families (`review`), each finding fixed or answered, then the lessons encoded, then the PR. Skills live in `.agents/skills` (`.claude/skills` links there). The user merges every PR.
 - **Review every major change**, slice or not, with the `review` skill in a fresh context. A major change adds a crate, module, MCP tool or event variant, changes the core model, or touches more than three files.
-- **Encode lessons in structure.** When a mistake could recur, make the strongest guard that works: a lint (`clippy.toml` in each crate, `deny.toml`), then a test, then a rule in this file or `CODE_RULES.md`.
+- **Encode lessons in structure.** When a mistake could recur, run the `correct` skill: it makes the strongest guard that works and proves it fails on the past mistake. The `audit` skill reads the whole repo at each milestone boundary.
 - **Record decisions** the code cannot explain in `docs/decisions/`, one numbered file each, and read an area's records before changing it.
 - **Ship from a branch.** Work on a branch off `main`, commit once `cargo fmt --check`, clippy and the tests pass, push, and open a PR against `main`.
-- **Say when a rule changes.** A PR that changes `CODE_RULES.md`, `AGENTS.md`, `.agents/skills/`, a `clippy.toml`, `deny.toml`, a CI workflow or `scripts/pr-check` says which rule changed, how and why under `## Rule changes`.
+- **Say when a rule changes.** A PR that changes `CODE_RULES.md`, `AGENTS.md`, `.agents/skills/`, a `clippy.toml`, `deny.toml`, a CI workflow, `scripts/pr-check` or a `scripts/check-*` says which rule changed, how and why under `## Rule changes`.
 
 | Rule | Enforced by |
 |---|---|
 | Changes reach `main` only through a PR with `ci-success` green. | the `main` ruleset |
 | A PR body has `## Verified`, `## Review` and `## Reflect`; each finding ends `Fixed`, `Answered: <reason>` or `Deferred #<issue>`; a rule change has `## Rule changes`. | `pr` CI job (`scripts/pr-check`, tested by `scripts/test-pr-check`) |
 | No model calls and no provider SDKs. | `deny.toml` (bans provider SDK crates); a direct call to a provider API: judgment, e.g. a `reqwest` call to `api.anthropic.com` |
+| No Windows-specific code in Rust or `Cargo.toml`: no `cfg`, `cfg_attr` or `cfg!` on `windows` or `unix`, no `windows_subsystem`, `std::os::windows` or `target_env = "msvc"`. | `scripts/check-platforms` (CI `pr` job, tested by `scripts/test-check-platforms`, including on fe486f6) |
+| No other Windows workaround. | judgment, e.g. fe486f6's per-key `var_os` lookup so Windows finds `Path`, or a `.exe` suffix |
 | Every agent run is sealed, and nothing of the user reaches it. | the tests under Agent runs in `CODE_RULES.md` |
 | State is rebuilt by replaying the event log; hidden state never crosses seats or empires. | proptests in `crates/sim-core/tests/replay.rs` |
 | Every other rule in this file. | judgment (`review`), e.g. an action allowed by a character's title in the setting instead of its office |
@@ -59,9 +61,9 @@ The game runs on Linux and macOS only. Windows is a later feature: write no Wind
 | `crates/sim-runner` | Launches the user's agent CLI (Claude Code, or Codex on a subscription or a local model server): a fresh, sandboxed headless run per seat each turn, and the author run that turns a prompt into a scenario the engine then validates. One provider may play any number of seats of any empires. |
 | `app/` | Tauri desktop app: a React UI (`app/src`) and its Rust backend (`app/src-tauri`), which hosts worlds in-process through `sim_server::host`. Creating and opening worlds, every empire and every seat's view, the chronicle, interventions and agent setup. The hex map, diplomacy graph and timeline come with the features behind them. |
 | `scenarios/` | Scenario files. `rome.yaml` is the reference scenario: Rome and Parthia in 27 BC. |
-| `scripts/` | Developer scripts. `empire` controls a throwaway headless world for verification. `pr-check <pr>` checks a PR body against the slice contract. |
+| `scripts/` | Developer scripts. `empire` controls a throwaway headless world for verification. `pr-check <pr>` checks a PR body against the slice contract. `check-platforms [rev]` fails on Windows-specific code. |
 | `docs/decisions/` | Decision records: what was decided, why, and what follows from it. |
-| `.agents/skills/` | The workflow's skills: `milestone`, `slice`, `verify`, `review`. |
+| `.agents/skills/` | The workflow's skills: `milestone`, `slice`, `verify`, `review`, `correct`, `audit`. |
 | `schema/` | `scenario.schema.json`, generated by `sim-server schema`. Regenerate it whenever scenario types change. |
 
 If a change alters the core model or a crate's ownership above, update this file in the same change.

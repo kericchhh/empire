@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+rev=${1:-HEAD}
+git rev-parse -q --verify "$rev^{tree}" >/dev/null 2>&1 || { echo "check-platforms: '$rev' is no revision of a git repository" >&2; exit 2; }
+hits=$(git grep -n -E 'cfg(_attr)?!?\([^])]*(windows|unix)|windows_subsystem|std::os::windows|target_env *= *"msvc"' "$rev" -- '*.rs' '*Cargo.toml')
+[ -z "$hits" ] && { echo "check-platforms: ok"; exit 0; }
+echo "check-platforms: Empire runs on Linux and macOS only (AGENTS.md). Write Unix code directly, as crates/sim-runner/src/fs.rs does, and branch only on target_os = \"linux\" or \"macos\":" >&2
+echo "$hits" >&2
+exit 1

@@ -5,7 +5,7 @@
 //! number of seats, in one empire or in rival ones, because every run is isolated and knows
 //! only its own seat's token, and nothing of the user's machine.
 
-#[cfg(not(unix))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("Empire runs on Linux and macOS only.");
 
 pub mod author;
