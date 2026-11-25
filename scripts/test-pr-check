@@ -6,7 +6,7 @@ stub=$(mktemp -d)
 trap 'rm -rf "$stub"' EXIT
 cat > "$stub/gh" <<'GH'
 #!/usr/bin/env bash
-case $2 in view) cat "$BODY" ;; diff) git diff --name-only "$RANGE" ;; esac
+case $2 in view) cat "$BODY" ;; diff) if [ -n "${FILES:-}" ]; then echo "$FILES"; else git diff --name-only "$RANGE"; fi ;; esac
 GH
 chmod +x "$stub/gh"
 failed=0
@@ -14,7 +14,7 @@ failed=0
 check() {
   local name=$1 want=$2 expect=$3 out status
   printf '%s' "$4" > "$stub/body"
-  out=$(PATH=$stub:$PATH BODY=$stub/body RANGE=$5 scripts/pr-check 0 2>&1) && status=pass || status=fail
+  out=$(PATH=$stub:$PATH BODY=$stub/body RANGE=$5 FILES=${6:-} scripts/pr-check 0 2>&1) && status=pass || status=fail
   if [ "$status" = "$want" ] && grep -qF -- "$expect" <<<"$out"; then
     echo "ok   $name"
   else
@@ -33,4 +33,5 @@ check "a numbered finding needs an outcome" fail "a finding has no outcome" "$(r
 check "outcomes may be bold, detailed or wrapped" pass "ok" "$(review $'- nit: x. **Fixed.**\n  - detail: the cause was y\n- bug: a long finding\n  that wraps. Fixed\n```diff\n- old line\n```')" e107f38..e107f38
 check "no findings is an outcome" pass "ok" "$(review '- No findings')" e107f38..e107f38
 check "a CI change is a rule change" fail ".github/workflows/ci.yml" "$good" 5388ade^..5388ade
+check "a scripts/check- change is a rule change" fail "scripts/check-platforms" "$good" "" scripts/check-platforms
 exit $failed
