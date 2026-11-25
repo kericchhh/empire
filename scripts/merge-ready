@@ -2,7 +2,7 @@
 set -euo pipefail
 
 pr=${1:?usage: scripts/merge-ready <pr-number>}
-json=$(gh pr view "$pr" --json headRefOid,comments,statusCheckRollup)
+json=$(gh pr view "$pr" --json author,headRefOid,comments,statusCheckRollup)
 head=$(jq -r .headRefOid <<<"$json")
 git fetch -q origin main "$head"
 pid=$(git diff origin/main..."$head" | git patch-id --stable | cut -d' ' -f1)
@@ -11,30 +11,36 @@ echo "head $head patch-id $pid"
 
 failed=0
 fail() { echo "merge-ready: $*" >&2; failed=1; }
+finish() { [ $failed = 0 ] && echo MERGE-READY; exit $failed; }
 
 ci=$(jq -r '[.statusCheckRollup[] | select(.name == "ci-success") | .conclusion] | unique | join(",")' <<<"$json")
 [ "$ci" = SUCCESS ] || fail "ci-success is ${ci:-not finished} on $head, not SUCCESS"
+git merge-base --is-ancestor origin/main "$head" || fail "the branch is behind main: rebase and re-run CI; a rebase that changes the diff needs a fresh verdict"
+[ "$(jq -r .author.login <<<"$json")" != "dependabot[bot]" ] || finish
 
 verdict='' verifier=''
-read -r verdict verifier < <(jq -r --arg pid "$pid" '
+IFS=$'\t' read -r verdict verifier < <(jq -r --arg pid "$pid" '
   [.comments[].body | gsub("\r"; "") | split("\n") as $l
     | def field($k): $l | map(select(startswith($k + ": "))[($k | length) + 2:]) | first // "";
     select(field("Verdict") != "") | {v: field("Verdict"), p: field("Patch-id"), who: field("Verifier")}]
-  | map(select(.p == $pid)) | last // empty | "\(.v) \(.who)"' <<<"$json") || true
+  | map(select(.p == $pid)) | last // empty | [.v, .who] | @tsv' <<<"$json") || true
 case $verdict in
   "") fail "no verdict for patch-id $pid: a fresh agent that built none of the PR posts one (the slice skill's Verdict step)" ;;
-  PASS | PASS+NOTES) [ -n "$verifier" ] || fail "the verdict for patch-id $pid names no Verifier" ;;
-  *) fail "the latest verdict for patch-id $pid is $verdict, not PASS or PASS+NOTES" ;;
+  PASS | PASS+NOTES) ;;
+  *) fail "the latest verdict for patch-id $pid is '$verdict', not PASS or PASS+NOTES" ;;
+esac
+case $verifier in
+  "") [ -z "$verdict" ] || fail "the verdict for patch-id $pid names no Verifier" ;;
+  *[[:space:]]*) fail "the verifier '$verifier' is not one word: a run id has no spaces" ;;
 esac
 
-while IFS=$'\t' read -r sha builders; do
+for sha in $(git rev-list --no-merges --abbrev-commit origin/main.."$head"); do
+  builders=$(git show -s --format=%B "$sha" | sed -n 's/^Builder: //p')
   [ -n "$builders" ] || fail "commit $sha has no 'Builder: <run id>' trailer"
-  case " $builders " in
-    *" $verifier "*) [ -z "$verifier" ] || fail "verifier $verifier built commit $sha: the verdict must come from an agent that built none of the PR" ;;
-  esac
-done < <(git log --no-merges --format='%h%x09%(trailers:key=Builder,valueonly,separator=%x20)' origin/main.."$head")
+  if [ -n "$verifier" ] && grep -qxF -- "$verifier" <<<"$builders"; then
+    fail "verifier $verifier built commit $sha: the verdict must come from an agent that built none of the PR"
+  fi
+done
 
 "$(dirname "$0")/pr-check" "$pr" >/dev/null || fail "scripts/pr-check $pr fails"
-
-[ $failed = 0 ] && echo MERGE-READY
-exit $failed
+finish

@@ -7,7 +7,7 @@ description: Take one Empire GitHub issue from claim to a verified, reviewed pul
 
 A slice is one issue, one branch, one PR. The issue's _Done when_ is the contract; the user merges once `scripts/merge-ready <pr>` prints `MERGE-READY`.
 
-Every commit on the branch ends with the trailer `Builder: <run id>`, naming the run that wrote it, where the run id is `${T3CODE_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-$CODEX_THREAD_ID}}`. A fix made by another run carries that run's id. `merge-ready` refuses a commit without the trailer, and a verdict from any run it names.
+Every commit on the branch ends with the trailer `Builder: <run id>`, naming the run that wrote it, where the run id is `${T3CODE_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-$CODEX_THREAD_ID}}`; the user's own commits carry `Builder: user`. A fix made by another run carries that run's id, and a squash keeps every `Builder:` line. `merge-ready` refuses a commit with no `Builder:` line, and a verdict from any run one of them names.
 
 ## Steps
 

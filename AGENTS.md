@@ -13,14 +13,14 @@ A desktop sandbox where several empires share one world and AI agents play every
 - **Review every major change**, slice or not, with the `review` skill in a fresh context. A major change adds a crate, module, MCP tool or event variant, changes the core model, or touches more than three files.
 - **Encode lessons in structure.** When a mistake could recur, make the strongest guard that works: a lint (`clippy.toml` in each crate, `deny.toml`), then a test, then a rule in this file or `CODE_RULES.md`.
 - **Record decisions** the code cannot explain in `docs/decisions/`, one numbered file each, and read an area's records before changing it.
-- **Ship from a branch.** Work on a branch off `main`, commit once `cargo fmt --check`, clippy and the tests pass, push, and open a PR against `main`.
+- **Ship from a branch.** Work on a branch off `main`, commit once `cargo fmt --check`, clippy and the tests pass, push, and open a PR against `main`. Every commit on a PR ends with a `Builder: <run id>` line, the run id as the `slice` skill defines it, or `Builder: user` for the user's own commits. To backfill a PR opened before this rule, run `git rebase origin/main --exec 'git commit --amend --no-edit --trailer "Builder: <id>"'`: the diff is unchanged, so the patch-id holds.
 - **Say when a rule changes.** A PR that changes `CODE_RULES.md`, `AGENTS.md`, `.agents/skills/`, a `clippy.toml`, `deny.toml`, a CI workflow, `scripts/pr-check` or `scripts/merge-ready` says which rule changed, how and why under `## Rule changes`.
 
 | Rule | Enforced by |
 |---|---|
 | Changes reach `main` only through a PR with `ci-success` green. | the `main` ruleset |
 | A PR body has `## Verified`, `## Review` and `## Reflect`; each finding ends `Fixed`, `Answered: <reason>` or `Deferred #<issue>`; a rule change has `## Rule changes`. | `pr` CI job (`scripts/pr-check`, tested by `scripts/test-pr-check`) |
-| A PR is merged only on `MERGE-READY`: `ci-success` green on its head, a `PASS` or `PASS+NOTES` verdict for its patch-id from a run named on none of its commits' `Builder:` trailers, and `scripts/pr-check` passing. | `scripts/merge-ready` (tested by `scripts/test-merge-ready`); that the user runs it before merging: judgment |
+| A PR is merged only on `MERGE-READY`: `ci-success` green on its head and its branch up to date with `main`, and, unless `dependabot[bot]` opened it, a `Builder:` line on every commit, a `PASS` or `PASS+NOTES` verdict for its patch-id from a run named on none of them, and `scripts/pr-check` passing. | `scripts/merge-ready` (tested by `scripts/test-merge-ready`); that the user runs it before merging: judgment |
 | No model calls and no provider SDKs. | `deny.toml` (bans provider SDK crates); a direct call to a provider API: judgment, e.g. a `reqwest` call to `api.anthropic.com` |
 | Every agent run is sealed, and nothing of the user reaches it. | the tests under Agent runs in `CODE_RULES.md` |
 | State is rebuilt by replaying the event log; hidden state never crosses seats or empires. | proptests in `crates/sim-core/tests/replay.rs` |
