@@ -25,7 +25,7 @@ Every commit on the branch ends with the trailer `Builder: <run id>`, naming the
     - runs `scripts/merge-ready <pr>` and takes the head and patch-id from its first line, `head <sha> patch-id <id>`, after checking that `git rev-parse HEAD` is that head;
     - drives, with the `verify` skill, each entry of `.agents/skills/verify/features/` that the slice touches, and each _Done when_ line, as a user would;
     - confirms with `ps -eo pid,args | grep '[d]ebug/sim-server'` that no world it or the builder started is still running: it stops its own, and notes any other;
-    - posts one PR comment in exactly this format, where `PASS+NOTES` means every claim holds with notes that need no change, and `FAIL` means a claim does not hold:
+    - posts one new PR comment in exactly this format, never editing an earlier one, since `merge-ready` refuses an edited or hidden verdict, where `PASS+NOTES` means every claim holds with notes that need no change, and `FAIL` means a claim does not hold:
 
       ```text
       Verdict: PASS | PASS+NOTES | FAIL

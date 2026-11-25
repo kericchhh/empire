@@ -20,7 +20,7 @@ A desktop sandbox where several empires share one world and AI agents play every
 |---|---|
 | Changes reach `main` only through a PR with `ci-success` green. | the `main` ruleset |
 | A PR body has `## Verified`, `## Review` and `## Reflect`; each finding ends `Fixed`, `Answered: <reason>` or `Deferred #<issue>`; a rule change has `## Rule changes`. | `pr` CI job (`scripts/pr-check`, tested by `scripts/test-pr-check`) |
-| A PR is merged only on `MERGE-READY`: `ci-success` green on its head and its branch up to date with `main`, and, unless `dependabot[bot]` opened it, a `Builder:` line on every commit, a `PASS` or `PASS+NOTES` verdict for its patch-id from a run named on none of them, and `scripts/pr-check` passing. | `scripts/merge-ready` (tested by `scripts/test-merge-ready`); that the user runs it before merging: judgment |
+| A PR is merged only on `MERGE-READY`: `ci-success` green on its head and its branch up to date with `main`, and, unless `dependabot[bot]` opened it and wrote every commit, a `Builder:` line on every commit, a `PASS` or `PASS+NOTES` verdict for its patch-id, in an unedited comment by the owner, a member or a collaborator, from a run named on none of them, and `scripts/pr-check` passing. | `scripts/merge-ready` (tested by `scripts/test-merge-ready`); that the user runs it before merging: judgment |
 | No model calls and no provider SDKs. | `deny.toml` (bans provider SDK crates); a direct call to a provider API: judgment, e.g. a `reqwest` call to `api.anthropic.com` |
 | Every agent run is sealed, and nothing of the user reaches it. | the tests under Agent runs in `CODE_RULES.md` |
 | State is rebuilt by replaying the event log; hidden state never crosses seats or empires. | proptests in `crates/sim-core/tests/replay.rs` |
