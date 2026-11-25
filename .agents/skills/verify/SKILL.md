@@ -46,6 +46,14 @@ mkdir -p "$evidence"
 scripts/empire tool princeps act '{"tick":0,"orders":[{"kind":"action","character":"augustus","action":"appoint","target":"sestius","choice":"commander"}]}' | tee "$evidence/appointment.json"
 scripts/empire tick 1 | tee "$evidence/tick.json"
 scripts/empire tool senate look '{}' | tee "$evidence/appointee.json"
+scripts/empire app --view 'Seen by The Senate' --out "$evidence/senate.png"
+```
+
+A PR body cannot carry a file, so publish a screenshot on its own signed orphan branch and link it in `## Verified` as `![senate](https://raw.githubusercontent.com/kericchhh/empire/evidence/appointments/senate.png)`:
+
+```sh
+tree=$(printf '100644 blob %s\tsenate.png\n' "$(git hash-object -w "$evidence/senate.png")" | git mktree)
+git push origin "$(git commit-tree -S "$tree" -m 'Evidence: appointments')":refs/heads/evidence/appointments
 ```
 
 ## Cleanup
@@ -55,7 +63,7 @@ scripts/empire stop
 rm -rf "$evidence"
 ```
 
-Delete the evidence directory once its key lines are in the PR's `## Verified` section. Before reporting done, `ps -eo pid,args | grep '[d]ebug/sim-server'` shows no world you started.
+Delete the evidence directory once its key lines and screenshots are in the PR's `## Verified` section. Before reporting done, `ps -eo pid,args | grep -E '[d]ebug/(sim-server|empire-app)|[t]auri-driver|[W]ebKitWebDriver|[w]eston --backend'` shows nothing you started.
 
 ## Steps
 
@@ -79,4 +87,4 @@ Delete the evidence directory once its key lines are in the PR's `## Verified` s
 
 **App (`app/`)**
 - `pnpm --dir app exec tsc --noEmit`.
-- Launch with `pnpm --dir app tauri dev` and show the screen the change affects: a screenshot, or ask the user to look when no display is available. The [app screens guide](features/app-screens.md) maps screens to code.
+- Screenshot the screen the change affects with `scripts/empire app --view <navigation text> --out <png>` and look at it. It opens a copy of the world you drove, in the real app, under WebDriver on a headless display. Linux only; on macOS ask the user to look. The [app screens guide](features/app-screens.md) gives setup, routes and gotchas.

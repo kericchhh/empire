@@ -14,6 +14,7 @@ Commands:
   tick [n]                           Force-close n ticks (default 1)
   chronicle                          Print the current chronicle
   views                              Print every seat's look view
+  app --out FILE [--view TEXT]       Screenshot a copy of this world in the desktop app (Linux)
   stop                               Stop this CLI's world and remove its state
   --help                             Show this help
 
@@ -35,6 +36,7 @@ init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 url() { printf 'http://127.0.0.1:%s%s' "$(cat "$state/port")" "$1"; }
 need() { [[ -f $state/$1 ]] || fail "no Empire world is recorded" "Start one with scripts/empire start"; }
+debug() { printf '%s/debug/%s' "$(cargo metadata -q --format-version 1 --no-deps | jq -r .target_directory)" "$1"; }
 
 # admin <METHOD> <path> [json]
 admin() {
@@ -91,7 +93,7 @@ case "$cmd" in
       fail "state directory already in use: $state" "Stop that world with scripts/empire stop, or set EMPIRE_STATE_DIR to a new path"
     cargo build -q -p sim-server || fail "could not build sim-server" "Fix the cargo build error, then retry"
     mkdir -p "$state" && chmod 700 "$state"
-    bin=$(cargo metadata -q --format-version 1 --no-deps | jq -r .target_directory)/debug/sim-server
+    bin=$(debug sim-server)
     detach=(setsid); command -v setsid >/dev/null || detach=(nohup)
     "${detach[@]}" "$bin" run --db "$state/world.db" --scenario "$(realpath "$scenario")" --seed "$seed" \
       --bind 127.0.0.1:0 --tick-seconds "$tick_seconds" >"$state/out" 2>"$state/log" </dev/null &
@@ -166,6 +168,77 @@ case "$cmd" in
     fi
     rm -rf "$state"
     jq -cn '{status: "stopped", state_removed: true}'
+    ;;
+  app)
+    shift
+    view="Whole world" out=
+    while (($#)); do
+      case "$1" in --view | --out) ;; *) fail "unknown app option: $1" "Run scripts/empire --help" ;; esac
+      (($# >= 2)) || fail "$1 needs a value" "Run scripts/empire --help"
+      if [[ $1 == --view ]]; then view=$2; else out=$2; fi
+      shift 2
+    done
+    [[ -n $out ]] || fail "app needs --out FILE" "Example: scripts/empire app --view 'Seen by The Senate' --out \"\$evidence/senate.png\""
+    [[ $(uname) == Linux ]] ||
+      fail "the desktop app can be driven on Linux only: tauri-driver has no macOS WebDriver" "Run on Linux, or ask the user to look at the app"
+    need pid
+    require() { command -v "$1" >/dev/null || fail "scripts/empire app requires $1" "$2"; }
+    require WebKitWebDriver "Install it: sudo pacman -S webkitgtk-6.0 on Arch, sudo apt install webkit2gtk-driver on Debian or Ubuntu"
+    require tauri-driver "cargo install --locked tauri-driver --version 2.1.0, and put ~/.cargo/bin on PATH"
+    require weston "Install weston, which gives the app a headless display"
+    require pnpm "Install pnpm, then run pnpm --dir app install"
+    [[ -n ${XDG_RUNTIME_DIR:-} ]] || fail "XDG_RUNTIME_DIR is not set" "Run from a normal login session"
+    app=$state/app
+    rm -rf "$app"
+    mkdir -p "$app/data/dev.empire.app/worlds"
+    pnpm --dir app tauri build --debug --no-bundle >"$app/build.log" 2>&1 ||
+      fail "could not build the desktop app" "Read $app/build.log"
+    bin=$(debug empire-app)
+    # The app gets its own data directory: a copy of this world, and no agent login, so the rules play every seat.
+    for f in "$state"/world.db*; do cp "$f" "$app/data/dev.empire.app/worlds/verify${f#"$state/world"}"; done
+    sock=empire-$$ port=$((20000 + RANDOM % 20000)) sid=
+    weston --backend=headless --socket="$sock" --width=1280 --height=820 >"$app/weston.log" 2>&1 &
+    wpid=$!
+    env -u DISPLAY WAYLAND_DISPLAY="$sock" GDK_BACKEND=wayland XDG_DATA_HOME="$app/data" \
+      tauri-driver --port "$port" --native-port $((port + 1)) >"$app/driver.log" 2>&1 &
+    dpid=$!
+    wd() { curl -s "http://127.0.0.1:$port/session$1" -H 'content-type: application/json' "${@:2}"; }
+    finish() {
+      [[ -z $sid ]] || wd "/$sid" -X DELETE >/dev/null || true
+      kill "$dpid" "$wpid" 2>/dev/null || true
+      wait "$dpid" "$wpid" 2>/dev/null || true
+    }
+    trap finish EXIT
+    for ((i = 0; i < 100; i++)); do
+      [[ -S $XDG_RUNTIME_DIR/$sock ]] && curl -sf "http://127.0.0.1:$port/status" >/dev/null && break
+      sleep 0.1
+    done
+    sid=$(wd "" -d "$(jq -nc --arg app "$bin" '{capabilities: {alwaysMatch: {"tauri:options": {application: $app}}}}')" |
+      jq -r '.value.sessionId // empty') || true
+    [[ -n $sid ]] || fail "the app did not start under WebDriver" "Read $app/driver.log and $app/weston.log, then retry"
+    el() { wd "/$sid/element" -d "$(jq -nc --arg x "$1" '{using: "xpath", value: $x}')" | jq -r '.value["element-6066-11e4-a52e-4f735466cecf"] // empty'; }
+    # React can drop a click made during a render, so click until the screen shows the result.
+    press() {
+      local e
+      for ((i = 0; i < 100; i++)); do
+        [[ -n $(el "$2") ]] && return
+        e=$([[ -z $1 ]] || el "$1")
+        [[ -z $e ]] || wd "/$sid/element/$e/click" -d '{}' >/dev/null
+        sleep 0.2
+      done
+      e=$(el '//*[contains(@class, "error")]')
+      fail "the app never showed $2${e:+: $(wd "/$sid/element/$e/text" | jq -r .value)}" "Read $app/driver.log"
+    }
+    on="//nav/button[normalize-space()=\"$view\"]"
+    press '//nav[@class="rail"]/button[contains(., "Saved")]' '//ul[@class="worlds"]/li[span="verify"]'
+    press '//ul[@class="worlds"]/li[span="verify"]/button' '//header[@class="bar"]'
+    [[ -n $(el "$on") ]] || fail "the app has no view '$view'" "Choose one of: $(wd "/$sid/execute/sync" \
+      -d '{"script": "return [...document.querySelectorAll(\"nav button\")].map((b) => b.textContent).join(\", \")", "args": []}' | jq -r .value)"
+    press "$on" "${on}[contains(concat(' ', @class, ' '), ' on ')]"
+    press '' '//main[not(.//*[contains(@class, "busy")])]'
+    mkdir -p "$(dirname "$out")"
+    wd "/$sid/screenshot" | jq -er .value | base64 -d >"$out" || fail "the screenshot failed" "Read $app/driver.log"
+    jq -cn --arg view "$view" --arg out "$out" '{status: "captured", view: $view, out: $out}'
     ;;
   *) fail "unknown command: ${cmd:-<empty>}" "Run scripts/empire --help" ;;
 esac
