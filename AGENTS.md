@@ -21,7 +21,8 @@ A desktop sandbox where several empires share one world and AI agents play every
 | Changes reach `main` only through a PR with `ci-success` green. | the `main` ruleset |
 | A PR body has `## Verified`, `## Review` and `## Reflect`; each finding ends `Fixed`, `Answered: <reason>` or `Deferred #<issue>`; a rule change has `## Rule changes`. | `pr` CI job (`scripts/pr-check`, tested by `scripts/test-pr-check`) |
 | No model calls and no provider SDKs. | `deny.toml` (bans provider SDK crates); a direct call to a provider API: judgment, e.g. a `reqwest` call to `api.anthropic.com` |
-| No Windows-specific code: no `cfg(windows)`, no `cfg(unix)` guards, no Windows workarounds. | `scripts/check-platforms` (CI `pr` job), which also proves it still fails on fe486f6 |
+| No Windows-specific code in Rust or `Cargo.toml`: no `cfg`, `cfg_attr` or `cfg!` on `windows` or `unix`, no `windows_subsystem`, `std::os::windows` or `target_env = "msvc"`. | `scripts/check-platforms` (CI `pr` job, tested by `scripts/test-check-platforms`, including on fe486f6) |
+| No other Windows workaround. | judgment, e.g. fe486f6's per-key `var_os` lookup so Windows finds `Path`, or a `.exe` suffix |
 | Every agent run is sealed, and nothing of the user reaches it. | the tests under Agent runs in `CODE_RULES.md` |
 | State is rebuilt by replaying the event log; hidden state never crosses seats or empires. | proptests in `crates/sim-core/tests/replay.rs` |
 | Every other rule in this file. | judgment (`review`), e.g. an action allowed by a character's title in the setting instead of its office |

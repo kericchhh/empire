@@ -165,8 +165,7 @@ jobs:
           fetch-depth: 0
       - run: scripts/test-pr-check
       - run: scripts/check-platforms
-      - name: check-platforms still catches fe486f6
-        run: if scripts/check-platforms fe486f6 2>/dev/null; then exit 1; fi
+      - run: scripts/test-check-platforms
       - if: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]' }}
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit
+check=$PWD/scripts/check-platforms
+repo=$(mktemp -d)
+trap 'rm -rf "$repo"' EXIT
+git -C "$repo" init -q
+failed=0
+
+expect() {
+  local name=$1 want=$2 status
+  "${@:3}" >/dev/null 2>&1
+  status=$?
+  if [ "$status" = "$want" ]; then echo "ok   $name"; else echo "FAIL $name: wanted exit $want, got $status"; failed=1; fi
+}
+tree() {
+  git -C "$repo" read-tree --empty
+  mkdir -p "$repo/$(dirname "$1")" && printf '%s\n' "$2" > "$repo/$1"
+  git -C "$repo" add "$1" && git -C "$repo" write-tree
+}
+case_() { expect "$1" "$2" bash -c 'cd "$1" && "$2" "$3"' _ "$repo" "$check" "$(tree "$3" "$4")"; }
+
+case_ 'cfg(windows)' 1 a.rs '#[cfg(windows)]'
+case_ 'cfg(unix)' 1 a.rs '#![cfg(unix)]'
+case_ 'cfg(not(unix))' 1 a.rs '#[cfg(not(unix))]'
+case_ 'cfg(not(any(unix)))' 1 a.rs '#[cfg(not(any(unix)))]'
+case_ 'cfg(any(windows, …))' 1 a.rs '#[cfg(any(windows, target_os = "linux"))]'
+case_ 'cfg(all(windows))' 1 a.rs '#[cfg(all(windows))]'
+case_ 'target_os = "windows"' 1 a.rs '#[cfg(target_os = "windows")]'
+case_ 'cfg_attr(windows, …)' 1 a.rs '#[cfg_attr(windows, path = "w.rs")]'
+case_ 'cfg!(windows)' 1 a.rs 'let w = cfg!(windows);'
+case_ 'windows_subsystem' 1 a.rs '#![windows_subsystem = "windows"]'
+case_ 'std::os::windows' 1 a.rs 'use std::os::windows::fs::MetadataExt;'
+case_ 'target_env = "msvc"' 1 a.rs 'let m = cfg!(target_env = "msvc");'
+case_ "Cargo.toml cfg(windows)" 1 crates/x/Cargo.toml "[target.'cfg(windows)'.dependencies]"
+case_ 'linux and macos branches pass' 0 a.rs $'#[cfg(not(any(target_os = "linux", target_os = "macos")))]\n#[cfg(target_os = "macos")]\nlet w = buf.windows(2);'
+case_ "Cargo.toml cfg(target_os) passes" 0 Cargo.toml "[target.'cfg(target_os = \"linux\")'.dependencies]"
+expect 'fe486f6 re-added Windows code' 1 "$check" fe486f6
+expect 'an unknown revision is an error' 2 "$check" nosuchrev
+expect 'outside a repository is an error' 2 bash -c 'cd / && "$1"' _ "$check"
+exit $failed
