@@ -161,7 +161,8 @@ impl Scenario {
     /// Human-readable date for a tick, e.g. "Spring, 27 BC".
     pub fn date(&self, tick: Tick) -> String {
         let per_year = self.calendar.periods.len().max(1) as u64;
-        let year = self.calendar.start_year + (tick.0 / per_year) as i64;
+        let year = i64::try_from(tick.0 / per_year)
+            .map_or(i64::MAX, |y| self.calendar.start_year.saturating_add(y));
         let period = self
             .calendar
             .periods

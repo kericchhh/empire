@@ -231,6 +231,7 @@ struct Chronicle {
 }
 
 #[tauri::command]
+#[expect(clippy::disallowed_methods, reason = "moves to Game::chronicle in #44")]
 async fn chronicle(state: State<'_, App>, after: i64) -> Res<Chronicle> {
     const PAGE: i64 = 5000;
     with(&state, async |h| {
@@ -246,7 +247,7 @@ async fn chronicle(state: State<'_, App>, after: i64) -> Res<Chronicle> {
                 .events_after(c.last, PAGE)
                 .await
                 .map_err(err)?;
-            let full = page.len() as i64 == PAGE;
+            let full = i64::try_from(page.len()) == Ok(PAGE);
             for (seq, e) in page {
                 c.last = seq;
                 if let Some(text) = describe(&w, &e, &Sight::all()) {
@@ -305,6 +306,7 @@ struct Provider {
     connected: bool,
 }
 
+#[expect(clippy::disallowed_methods, reason = "a --version probe runs no agent")]
 async fn version(program: &str) -> Option<String> {
     // A stalled CLI must not leave Providers checking forever.
     let out = tokio::process::Command::new(program)

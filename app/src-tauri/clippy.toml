@@ -1,0 +1,6 @@
+too-many-lines-threshold = 100
+disallowed-methods = [
+  { path = "sim_core::perceive::describe", reason = "describe events only in sim-core and sim-server: show the chronicle sim-server builds" },
+  { path = "std::process::Command::new", reason = "the app starts no agent CLI: agent runs go through sim_runner's sandbox; a --version probe carries an #[expect]" },
+  { path = "tokio::process::Command::new", reason = "the app starts no agent CLI: agent runs go through sim_runner's sandbox; a --version probe carries an #[expect]" },
+]

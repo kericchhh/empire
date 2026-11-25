@@ -1,4 +1,6 @@
+too-many-lines-threshold = 100
 disallowed-methods = [
+  { path = "sim_core::perceive::describe", reason = "describe events only in sim-core and sim-server: a run reads the chronicle through its MCP tools" },
   { path = "std::process::Command::new", reason = "start agent processes only through turn::sandbox" },
   { path = "tokio::process::Command::new", reason = "start agent processes only through turn::sandbox" },
 ]

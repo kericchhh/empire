@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+failed=0
+rule() {
+  local pattern=$1 allowed=$2 fix=$3 tests_may=${4:-} test_dir='(^|/)tests/' file line tests
+  while IFS=: read -r file line _; do
+    [[ $file =~ $allowed ]] && continue
+    if [ -n "$tests_may" ]; then
+      [[ $file =~ $test_dir ]] && continue
+      tests=$(awk '/^#\[cfg\(test\)\]$/ { t = NR; next } t == NR - 1 && /^mod tests/ { print t; exit }' "$file")
+      [ -n "$tests" ] && [ "$line" -gt "$tests" ] && continue
+    fi
+    echo "$file:$line: $fix" >&2
+    failed=1
+  done < <(git grep -nE "$pattern" -- '*.rs' || true)
+}
+
+rule 'Visibility::' '^crates/sim-core/src/(engine|perceive)\.rs$' \
+  'build a Visibility only in engine.rs and the sight module (perceive.rs): ask the sight module who sees the event' \
+  tests-may
+rule 'clippy::(too_many_lines|cast_possible_wrap)[^#]*$' '^$' \
+  'an exception names its issue on the same line: #[expect(clippy::<lint>, reason = "split in #<issue>")]'
+
+[ $failed = 0 ] && echo "lint: ok"
+exit $failed

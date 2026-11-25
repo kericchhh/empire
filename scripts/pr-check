@@ -36,7 +36,7 @@ while IFS= read -r finding; do
     || fail "a finding has no outcome: end it with 'Fixed', 'Answered: <reason>', or open an issue and end it with 'Deferred #<issue>': $finding"
 done < <(findings)
 
-rules=$(grep -E '^(CODE_RULES\.md|AGENTS\.md|\.agents/skills/.*|(.*/)?clippy\.toml|deny\.toml|\.github/workflows/.*|scripts/(test-)?pr-check|scripts/fixtures/pr-check/.*)$' <<<"$files" || true)
+rules=$(grep -E '^(CODE_RULES\.md|AGENTS\.md|\.agents/skills/.*|(.*/)?clippy\.toml|deny\.toml|\.github/workflows/.*|scripts/((test-)?pr-check|lint|dupes)|\.jscpd(-baseline)?\.json|scripts/fixtures/pr-check/.*)$' <<<"$files" || true)
 [ -z "$rules" ] || present 'Rule changes' \
   || fail "this PR changes rule files ($(paste -sd " " <<<"$rules")), so add '## Rule changes': which rule changed, how, and why"
 

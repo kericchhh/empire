@@ -1,6 +1,6 @@
 # Code rules
 
-Apply every rule that touches the code you change. Each rule names what enforces it: a lint, a test, a CI job, or `judgment`, which the `review` skill checks and whose example shows the failure to look for. A change is finished when CI's `ci-success` would pass, which includes `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `tsc --noEmit` in `app/` when `app/src` changed.
+Apply every rule that touches the code you change. Each rule names what enforces it: a lint, a test, a CI job, or `judgment`, which the `review` skill checks and whose example shows the failure to look for. A change is finished when CI's `ci-success` would pass, which includes `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `scripts/lint`, `scripts/dupes`, and `tsc --noEmit` in `app/` when `app/src` changed.
 
 ## Determinism (`sim-core`)
 
@@ -26,6 +26,8 @@ Apply every rule that touches the code you change. Each rule names what enforces
 | Rule | Enforced by |
 |---|---|
 | A tool finds its seat from the token and builds output with `perceive(&World, &State, &SeatId)`. `Sight` in `perceive.rs` alone decides visibility, and new foreign-owned state or event fields are shifted in `shift_foreign`. | proptest `no_seat_sees_anything_hidden_of_another_empire` (`sim-core/tests/replay.rs`); a tool reading `State` directly, or a new foreign field `shift_foreign` never shifts: judgment, e.g. a foreign `treasury` the proptest leaves untouched |
+| A `Visibility` is built only in `engine.rs` and the sight module (`perceive.rs`). | `scripts/lint` (`lint` CI job) |
+| Event text comes from `describe`, which only `sim-core` and `sim-server` call; the app shows the chronicle `sim-server` builds. | `app/src-tauri/clippy.toml`, `crates/sim-runner/clippy.toml` (ban `describe`) |
 | Tool inputs and outputs derive `serde` and `schemars`. | compiler: rmcp's `Parameters` and `Json` require `JsonSchema` |
 | Tool descriptions are written for an agent: what the tool does and when to call it. | judgment, e.g. "Ends the turn." with no word on what happens to queued orders |
 | Every `wait_for_turn` result is self-contained: an agent with a fresh context and only that result can play the turn. | judgment (`verify` reads one), e.g. a result that says "act now" but omits the actions the office allows |
@@ -36,7 +38,7 @@ Apply every rule that touches the code you change. Each rule names what enforces
 
 | Rule | Enforced by |
 |---|---|
-| Start every agent process through `turn::sandbox`, and only once `check_sandbox` passes. A process that is not an agent run carries an `#[expect]` with its reason. | `crates/sim-runner/clippy.toml` (bans `Command::new`); the `check_sandbox` gate: judgment, e.g. a new run path that skips the check `host.rs` and `author.rs` make |
+| Start every agent process through `turn::sandbox`, and only once `check_sandbox` passes; the app starts none. A process that is not an agent run, such as a `--version` probe, carries an `#[expect]` with its reason. | `crates/sim-runner/clippy.toml` and `app/src-tauri/clippy.toml` (ban `Command::new`); the `check_sandbox` gate: judgment, e.g. a new run path that skips the check `host.rs` and `author.rs` make |
 | A run's network is the gate's (`net`). An agent kind's `HOSTS` lists only the hosts a live run's refusal log confirmed. | tests `a_run_reaches_the_world_and_its_provider_only`, `the_proxy_joins_admitted_hosts_only`; the host list: judgment, e.g. a whole `*.cdn` domain added on a guess |
 | Nothing of the user reaches a run: no host environment variable beyond the sandbox's list, no host path, no file, no account detail. A new agent kind or flag needs a test that proves it. | tests in `sandbox.rs`, `a_run_gets_only_the_turn_tools_and_nothing_of_the_users`, `runs_are_sandboxed_with_only_the_login_and_private_logs` |
 | A run knows only its own seat token, on stdin, never on the command line. | test `the_token_travels_in_the_prompt_never_on_the_command_line` |
@@ -58,6 +60,9 @@ Apply every rule that touches the code you change. Each rule names what enforces
 | Newtype ids (`SeatId`, `RegionId`, `Tick`) at every boundary. | judgment, e.g. `fn seat(id: &str)` on a public API |
 | Library crates return `thiserror` enums; `anyhow` only in binary `main`s. | `deny.toml`, `crates/sim-server/clippy.toml` |
 | Outside tests, handle every `Result`; where an invariant guarantees success, `expect("<why this holds>")`. | rustc `unused_must_use` under `-D warnings`; the rest judgment, e.g. `let _ = store.append(&e)` dropping a failed write |
+| A function has at most 100 lines; a longer one carries `#[expect(clippy::too_many_lines, reason = "split in #<issue>")]`, its issue on the same line. Every crate sets `[lints] workspace = true`. | `too_many_lines` in `[workspace.lints.clippy]` with `too-many-lines-threshold` in each `clippy.toml`; the issue: `scripts/lint`; a crate without the workspace lints: judgment |
+| Convert to a signed integer with `try_from`, never a wrapping `as`. | `cast_possible_wrap` in `[workspace.lints.clippy]` |
+| Copy no code: move it into one function both places call. A clone that must stay joins `.jscpd-baseline.json` (`scripts/dupes --update-baseline`) with its reason under `## Rule changes`. | `scripts/dupes` (`lint` CI job, jscpd against the baseline) |
 | Log with `tracing`, one span per tick and per seat request. | judgment, e.g. `println!` in the tick loop |
 
 ## Comments

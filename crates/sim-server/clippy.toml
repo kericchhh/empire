@@ -1,3 +1,4 @@
+too-many-lines-threshold = 100
 disallowed-types = [
   { path = "anyhow::Error", reason = "library code returns thiserror enums; anyhow is for main" },
   { path = "anyhow::Result", reason = "library code returns thiserror enums; anyhow is for main" },

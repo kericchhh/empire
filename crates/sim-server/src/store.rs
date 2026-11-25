@@ -127,7 +127,7 @@ impl Store {
         for e in events {
             let body = serde_json::to_string(e).map_err(StoreError::Encode)?;
             last = sqlx::query("INSERT INTO events (tick, body) VALUES (?, ?)")
-                .bind(e.tick.0 as i64)
+                .bind(i64::try_from(e.tick.0).expect("ticks count seasons, far below i64::MAX"))
                 .bind(body)
                 .execute(&mut *tx)
                 .await?

@@ -1,0 +1,8 @@
+{
+  "minTokens": 40,
+  "format": ["rust", "typescript", "tsx"],
+  "ignore": ["**/bindings/**"],
+  "reporters": ["console"],
+  "baseline": ".jscpd-baseline.json",
+  "failOnNewClones": 0
+}
